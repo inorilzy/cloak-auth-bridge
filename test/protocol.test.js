@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseServerMessage, validateCaptureRequest } from "../extension/protocol.js";
+import {
+  isValidHelloAck,
+  parseServerMessage,
+  validateCaptureRequest
+} from "../extension/protocol.js";
 
 test("valid capture request is reduced to trusted fields", () => {
   assert.deepEqual(validateCaptureRequest({
@@ -30,3 +34,20 @@ test("invalid JSON is rejected", () => {
   assert.throws(() => parseServerMessage("{"), /有效 JSON/);
 });
 
+test("hello ack is rejected before a server challenge was verified", () => {
+  const clientChallenge = "abcdefghijklmnop";
+  assert.equal(isValidHelloAck({
+    type: "hello_ack",
+    ok: true,
+    client_challenge: clientChallenge,
+    server_challenge: null
+  }, clientChallenge, null), false);
+
+  const serverChallenge = "ponmlkjihgfedcba";
+  assert.equal(isValidHelloAck({
+    type: "hello_ack",
+    ok: true,
+    client_challenge: clientChallenge,
+    server_challenge: serverChallenge
+  }, clientChallenge, serverChallenge), true);
+});

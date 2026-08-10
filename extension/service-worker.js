@@ -1,6 +1,11 @@
 import { captureAuthBundle } from "./capture.js";
 import { createHmacProof } from "./auth.js";
-import { parseServerMessage, safeErrorMessage, validateCaptureRequest } from "./protocol.js";
+import {
+  isValidHelloAck,
+  parseServerMessage,
+  safeErrorMessage,
+  validateCaptureRequest
+} from "./protocol.js";
 
 const DEFAULT_SETTINGS = {
   serverUrl: "ws://127.0.0.1:17321",
@@ -12,7 +17,8 @@ let authenticated = false;
 let reconnectTimer = null;
 let keepAliveTimer = null;
 let currentChallenge = null;
-let expectedServerProof = null;
+let currentServerChallenge = null;
+let currentPairingToken = null;
 let connectionGeneration = 0;
 const seenNonces = new Set();
 let noncesLoaded = false;
@@ -41,7 +47,8 @@ function closeSocket() {
   keepAliveTimer = null;
   authenticated = false;
   currentChallenge = null;
-  expectedServerProof = null;
+  currentServerChallenge = null;
+  currentPairingToken = null;
   if (socket) {
     const closingSocket = socket;
     socket = null;
@@ -104,12 +111,31 @@ async function handleMessage(event, responseSocket) {
   let message;
   try {
     message = parseServerMessage(event.data);
-    if (message.type === "hello_ack") {
+    if (message.type === "hello_challenge") {
       if (
-        message.ok !== true
-        || message.challenge !== currentChallenge
-        || message.proof !== expectedServerProof
+        typeof message.server_challenge !== "string"
+        || message.server_challenge.length < 16
+        || message.client_challenge !== currentChallenge
+        || !currentPairingToken
       ) {
+        throw new Error("本地服务 challenge 无效");
+      }
+      const proofPayload = `${currentChallenge}:${message.server_challenge}`;
+      const expectedProof = await createHmacProof(currentPairingToken, "server", proofPayload);
+      if (message.proof !== expectedProof) {
+        throw new Error("本地服务配对验证失败");
+      }
+      currentServerChallenge = message.server_challenge;
+      send({
+        type: "hello_response",
+        client_challenge: currentChallenge,
+        server_challenge: currentServerChallenge,
+        proof: await createHmacProof(currentPairingToken, "client", proofPayload)
+      }, responseSocket);
+      return;
+    }
+    if (message.type === "hello_ack") {
+      if (!isValidHelloAck(message, currentChallenge, currentServerChallenge)) {
         throw new Error("本地服务配对验证失败");
       }
       authenticated = true;
@@ -126,7 +152,13 @@ async function handleMessage(event, responseSocket) {
   } catch (error) {
     const id = typeof message?.id === "string" ? message.id : null;
     if (id && responseSocket?.readyState === WebSocket.OPEN) {
-      send({ id, type: "capture_auth_result", ok: false, error: safeErrorMessage(error) }, responseSocket);
+      send({
+        id,
+        type: "capture_auth_result",
+        nonce: typeof message?.nonce === "string" ? message.nonce : undefined,
+        ok: false,
+        error: safeErrorMessage(error)
+      }, responseSocket);
     }
     if (socket === responseSocket) {
       setConnectionState("error", safeErrorMessage(error));
@@ -171,21 +203,16 @@ async function connect() {
         return;
       }
       currentChallenge = randomToken();
-      const [clientProof, serverProof] = await Promise.all([
-        createHmacProof(settings.pairingToken, "client", currentChallenge),
-        createHmacProof(settings.pairingToken, "server", currentChallenge)
-      ]);
+      currentPairingToken = settings.pairingToken;
       if (generation !== connectionGeneration || socket !== connectingSocket) {
         connectingSocket.close();
         return;
       }
-      expectedServerProof = serverProof;
       send({
         type: "hello",
         extension_id: chrome.runtime.id,
         profile_alias: settings.profileAlias,
-        challenge: currentChallenge,
-        proof: clientProof
+        challenge: currentChallenge
       }, connectingSocket);
       keepAliveTimer = setInterval(() => {
         if (authenticated && socket?.readyState === WebSocket.OPEN) {

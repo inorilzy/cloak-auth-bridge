@@ -1,0 +1,10 @@
+{
+  "bilibili-main": {
+    "path": "profiles/bilibili-main",
+    "allowedSites": [
+      "bilibili-main"
+    ],
+    "dedicated": true,
+    "headless": false
+  }
+}

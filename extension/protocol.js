@@ -43,3 +43,14 @@ export function safeErrorMessage(error) {
   return "未知错误";
 }
 
+export function isValidHelloAck(message, clientChallenge, serverChallenge) {
+  return Boolean(
+    message?.type === "hello_ack"
+    && message.ok === true
+    && typeof clientChallenge === "string"
+    && typeof serverChallenge === "string"
+    && serverChallenge.length >= 16
+    && message.client_challenge === clientChallenge
+    && message.server_challenge === serverChallenge
+  );
+}

@@ -3,4 +3,8 @@ auth-state/
 profiles/
 *.auth.json
 *.storage-state.json
-
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
