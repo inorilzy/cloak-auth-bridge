@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cloak Auth Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">LOCAL AUTH BRIDGE</p>
+          <h1>Cloak Auth Bridge</h1>
+        </div>
+        <span id="connection" class="status">读取中</span>
+      </header>
+
+      <section>
+        <h2>本地服务</h2>
+        <label>WebSocket 地址<input id="server-url" type="url" value="ws://127.0.0.1:17321"></label>
+        <label>配对 Token<input id="pairing-token" type="password" autocomplete="off" placeholder="由本地服务生成"></label>
+        <label>Chrome Profile 别名<input id="profile-alias" type="text" value="chrome-default"></label>
+        <button id="save-settings" class="secondary">保存并重连</button>
+      </section>
+
+      <section>
+        <h2>登记当前站点</h2>
+        <label>站点 ID<input id="site-id" type="text" placeholder="example-main"></label>
+        <label>Cookie 域名（每行一个）<textarea id="cookie-domains" rows="2"></textarea></label>
+        <label>Origins（每行一个）<textarea id="origins" rows="3"></textarea></label>
+        <button id="save-site">授权并加入白名单</button>
+      </section>
+
+      <section>
+        <div class="section-heading"><h2>白名单</h2><span id="site-count">0</span></div>
+        <div id="sites" class="sites"><p class="empty">尚未登记站点</p></div>
+      </section>
+
+      <p id="notice" role="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
+

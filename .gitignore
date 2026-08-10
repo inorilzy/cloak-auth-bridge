@@ -1,0 +1,6 @@
+.auth/
+auth-state/
+profiles/
+*.auth.json
+*.storage-state.json
+

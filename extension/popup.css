@@ -1,0 +1,35 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  color: #172019;
+  background: #f4f3ed;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; width: 390px; background: #f4f3ed; }
+main { padding: 18px; }
+header, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+header { margin-bottom: 14px; }
+.eyebrow { margin: 0 0 3px; color: #657066; font: 700 10px/1 monospace; letter-spacing: .13em; }
+h1 { margin: 0; font: 700 20px/1.15 Georgia, serif; }
+h2 { margin: 0 0 12px; font-size: 13px; }
+section { margin-top: 10px; padding: 14px; border: 1px solid #d9dbd2; border-radius: 12px; background: #fff; }
+label { display: block; margin-top: 10px; color: #4f5a51; font-size: 11px; font-weight: 650; }
+input, textarea { width: 100%; margin-top: 5px; padding: 9px 10px; border: 1px solid #ced2ca; border-radius: 7px; color: #172019; background: #fbfcf9; font: 12px/1.35 ui-monospace, "Cascadia Code", monospace; resize: vertical; }
+input:focus, textarea:focus { outline: 2px solid #a7c6ac; border-color: #557c5d; }
+button { width: 100%; margin-top: 12px; padding: 9px 12px; border: 0; border-radius: 7px; color: white; background: #285b37; font-weight: 700; cursor: pointer; }
+button:hover { background: #1f4b2d; }
+button.secondary { color: #285b37; background: #e4eee5; }
+button.danger { width: auto; margin: 0; padding: 5px 8px; color: #8d302a; background: #f8e8e5; font-size: 11px; }
+.status { padding: 5px 8px; border-radius: 999px; color: #665b38; background: #efe9cf; font-size: 10px; font-weight: 750; }
+.status.connected { color: #245a33; background: #dcecdc; }
+.status.error { color: #8d302a; background: #f5ded9; }
+.sites { display: grid; gap: 8px; }
+.site { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px; border-radius: 8px; background: #f5f7f2; }
+.site strong, .site small { display: block; }
+.site small { margin-top: 2px; max-width: 260px; overflow: hidden; color: #6b746c; text-overflow: ellipsis; white-space: nowrap; }
+.empty { margin: 0; color: #7d847e; font-size: 12px; }
+#site-count { color: #697269; font: 700 11px/1 monospace; }
+#notice { min-height: 16px; margin: 12px 2px 0; color: #526056; font-size: 11px; }
+#notice.error { color: #a22d27; }
+
