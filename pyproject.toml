@@ -56,3 +56,9 @@ exclude = [".venv"]
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+
+
+[tool.ruff.lint.per-file-ignores]
+# CDP attach paths intentionally swallow non-fatal protocol errors.
+"cloak_auth_bridge/reverse_session.py" = ["S110", "S112", "BLE001"]
+"cloak_auth_bridge/mcp_server.py" = ["S110", "BLE001"]

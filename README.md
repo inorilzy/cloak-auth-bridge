@@ -96,66 +96,66 @@ Cursor 本地开发可用仓库内 `.cursor/mcp.json`。
 ### 日常流程
 
 ```text
-IDE 启动 MCP（cloak-auth-bridge + js-reverse-cloak-auth）
+IDE 启动 MCP（仅 cloak-auth-bridge）
   -> 扩展自动连上本机 WS（免 Token）
-  -> auth_list_sites 确认 source_connected=true
   -> auth_sync_to_cloak
-  -> cloak_debug_open（启动 Cloak + CDP :9333）
-  -> 用 js-reverse-cloak-auth 做抓包/断点/脚本逆向
+  -> cloak_debug_open（启动 Cloak + CDP，并自动 reverse_attach）
+  -> 同一 MCP 内调试：navigate_page / list_network_requests /
+     search_in_sources / set_breakpoint_on_text / evaluate_script ...
   -> cloak_debug_close
 ```
 
 ## MCP 工具
 
-认证桥：
+### 认证桥
 
 - `auth_list_sites` — 站点列表 + 扩展是否已连接
 - `auth_sync_to_cloak` — 从 Chrome 扩展采集并导入 Cloak（`mode=merge|replace`）
 - `auth_verify_cloak` — 验证 Profile 登录态
 - `auth_clear_cloak` — 清理（必须 `confirm=true`）
 
-Cloak 会话（给 js-reverse 挂接调试）：
+### Cloak 会话
 
-- `cloak_debug_open` — 打开 headed Cloak（默认 `shared-main`）并暴露 CDP `http://127.0.0.1:9333`
-- `cloak_debug_tab` — 同一窗口再开 HTTPS tab
-- `cloak_debug_list` / `cloak_debug_status` / `cloak_debug_close`
+- `cloak_debug_open` — 打开 headed Cloak（默认 `shared-main`）并暴露 CDP `http://127.0.0.1:9333`；会尝试自动 `reverse_attach`
+- `cloak_debug_tab` / `cloak_debug_list` / `cloak_debug_status` / `cloak_debug_close`
 
-### 与 js-reverse-mcp 组合（推荐）
+### 内置逆向工具（Python 重写 js-reverse 工具面）
 
-`js-reverse-mcp` 自带完整 CDP 调试工具；`--cloak` 会**自己再起一个** Cloak，和 auth profile 不是同一进程。  
-正确组合是：
+会话：
 
-1. **auth 桥负责**：同步登录态 + 启动 Cloak（`cloak_debug_open`）
-2. **js-reverse 负责**：挂到该 CDP 做调试（`--browserUrl`，**不要**再加 `--cloak`）
+- `reverse_attach` / `reverse_detach` / `reverse_status`
 
-Codex 示例：
+页面与导航：
 
-```toml
-[mcp_servers.cloak-auth-bridge]
-command = "uvx"
-args = ["--from", "git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0", "cloak-auth-bridge-mcp"]
+- `select_page` / `new_page` / `navigate_page` / `select_frame` / `click_element` / `take_screenshot`
 
-[mcp_servers.js-reverse-cloak-auth]
-command = "npx"
-args = ["-y", "js-reverse-mcp@latest", "--browserUrl", "http://127.0.0.1:9333"]
-```
+脚本分析：
 
-工作流：
+- `list_scripts` / `get_script_source` / `save_script_source` / `search_in_sources`
+
+断点与执行：
+
+- `set_breakpoint_on_text` / `break_on_xhr` / `remove_breakpoint` / `list_breakpoints`
+- `get_paused_info` / `pause_or_resume` / `step`
+
+网络与 WebSocket：
+
+- `list_network_requests` / `clear_network_requests` / `get_request_initiator` / `get_websocket_messages`
+
+状态与检查：
+
+- `list_console_messages` / `evaluate_script` / `clear_site_data`
+
+这些工具附着在 `cloak_debug_open` 启动的同一 Cloak CDP 会话上，**一个 MCP 完成同步 + 调试**，不再依赖第二个 js-reverse 进程。
+
+统一工作流：
 
 ```text
 auth_sync_to_cloak(site, profile)
-cloak_debug_open(profile, urls=[...])   # 返回 cdp_http / js_reverse 提示
-# 然后用 js-reverse-cloak-auth：
-#   navigate_page / list_network_requests / search_in_sources /
-#   set_breakpoint_on_text / evaluate_script / take_screenshot ...
+cloak_debug_open(profile, urls=[...])
+list_network_requests / search_in_sources / evaluate_script / ...
 cloak_debug_close
 ```
-
-注意：
-
-- Free 计划同时只能 1 个 browser：先 `cloak_debug_open`，再让 js-reverse attach，不要并行再 `--cloak` 起第二个。
-- `cloak_debug_open` 占用 profile 目录锁时，不要同时 CLI 再 launch 同一 profile。
-- `js-reverse` 的 `--cloak` 与 `--browserUrl` 互斥；挂接模式只用 `--browserUrl`。
 
 同步示例：
 
