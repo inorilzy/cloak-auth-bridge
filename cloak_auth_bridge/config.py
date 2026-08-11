@@ -1,21 +1,102 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SITES_DIR = PROJECT_ROOT / "sites"
-PROFILES_FILE = PROJECT_ROOT / "profiles.json"
-PROFILES_DIR = PROJECT_ROOT / "profiles"
-AUTH_DIR = PROJECT_ROOT / ".auth"
+PACKAGE_ROOT = Path(__file__).resolve().parent
+DEFAULTS_DIR = PACKAGE_ROOT / "defaults"
 HOSTNAME_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
+
+
+def _looks_like_project_root(path: Path) -> bool:
+    return (path / "sites").is_dir() and (path / "profiles.json").is_file()
+
+
+def resolve_data_root() -> Path:
+    """Resolve runtime data root for sites/profiles/auth/profile storage.
+
+    Priority:
+    1. CLOAK_AUTH_BRIDGE_HOME
+    2. Current working directory when it is a checkout (has sites/ + profiles.json)
+    3. Parent of package when running from a source checkout
+    4. ~/.cloak-auth-bridge (seeded from packaged defaults on first use)
+    """
+    env_home = os.environ.get("CLOAK_AUTH_BRIDGE_HOME", "").strip()
+    if env_home:
+        root = Path(env_home).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        ensure_user_data(root)
+        return root
+
+    cwd = Path.cwd().resolve()
+    if _looks_like_project_root(cwd):
+        return cwd
+
+    source_root = PACKAGE_ROOT.parent
+    if _looks_like_project_root(source_root):
+        return source_root
+
+    root = (Path.home() / ".cloak-auth-bridge").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    ensure_user_data(root)
+    return root
+
+
+def ensure_user_data(root: Path) -> None:
+    """Seed missing sites/profiles/extension into a user data root."""
+    sites_dir = root / "sites"
+    profiles_file = root / "profiles.json"
+    extension_dir = root / "extension"
+    profiles_dir = root / "profiles"
+    auth_dir = root / ".auth"
+
+    sites_dir.mkdir(parents=True, exist_ok=True)
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    auth_dir.mkdir(parents=True, exist_ok=True)
+
+    default_sites = DEFAULTS_DIR / "sites"
+    if default_sites.is_dir():
+        for src in default_sites.glob("*.json"):
+            dest = sites_dir / src.name
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+    default_profiles = DEFAULTS_DIR / "profiles.json"
+    if default_profiles.is_file() and not profiles_file.exists():
+        shutil.copy2(default_profiles, profiles_file)
+
+    default_extension = DEFAULTS_DIR / "extension"
+    if default_extension.is_dir() and not (extension_dir / "manifest.json").exists():
+        if extension_dir.exists():
+            shutil.rmtree(extension_dir)
+        shutil.copytree(default_extension, extension_dir)
+
+
+# Lazily resolved module-level paths keep tests and source checkouts working.
+PROJECT_ROOT = resolve_data_root()
+SITES_DIR = PROJECT_ROOT / "sites"
+PROFILES_FILE = PROJECT_ROOT / "profiles.json"
+PROFILES_DIR = PROJECT_ROOT / "profiles"
+AUTH_DIR = PROJECT_ROOT / ".auth"
+
+
+def refresh_paths() -> None:
+    """Re-resolve paths (useful after env/cwd changes in long-lived processes)."""
+    global PROJECT_ROOT, SITES_DIR, PROFILES_FILE, PROFILES_DIR, AUTH_DIR
+    PROJECT_ROOT = resolve_data_root()
+    SITES_DIR = PROJECT_ROOT / "sites"
+    PROFILES_FILE = PROJECT_ROOT / "profiles.json"
+    PROFILES_DIR = PROJECT_ROOT / "profiles"
+    AUTH_DIR = PROJECT_ROOT / ".auth"
 
 
 class VerifyConfig(BaseModel):
@@ -68,18 +149,12 @@ class SiteConfig(BaseModel):
     def validate_origins(cls, values: list[str]) -> list[str]:
         for value in values:
             parsed = urlsplit(value)
-            canonical = f"https://{parsed.netloc}"
-            if (
-                parsed.scheme != "https"
-                or not parsed.hostname
-                or parsed.username
-                or parsed.password
-                or parsed.path
-                or parsed.query
-                or parsed.fragment
-                or value != canonical
-            ):
-                raise ValueError("origins must be canonical HTTPS origins without a trailing slash")
+            if parsed.scheme != "https" or parsed.netloc == "" or parsed.path not in {"", "/"}:
+                raise ValueError("origins must be canonical HTTPS origins")
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError("origins must not include credentials/query/fragment")
+        # Canonicalize by dropping trailing slash.
+        values = [value.rstrip("/") for value in values]
         return list(dict.fromkeys(values))
 
 
@@ -105,6 +180,12 @@ class Registry:
 
     @classmethod
     def load(cls) -> Registry:
+        refresh_paths()
+        if not SITES_DIR.is_dir():
+            raise FileNotFoundError(f"sites directory not found: {SITES_DIR}")
+        if not PROFILES_FILE.is_file():
+            raise FileNotFoundError(f"profiles.json not found: {PROFILES_FILE}")
+
         sites: dict[str, SiteConfig] = {}
         for path in sorted(SITES_DIR.glob("*.json")):
             site = SiteConfig.model_validate_json(path.read_text(encoding="utf-8"))
@@ -126,7 +207,9 @@ class Registry:
     @staticmethod
     def resolve_profile_path(profile: ProfileConfig) -> Path:
         base = PROFILES_DIR.resolve()
-        resolved = (PROJECT_ROOT / profile.path).resolve()
+        # Profile paths are stored relative to data root, e.g. profiles/foo
+        candidate = Path(profile.path)
+        resolved = candidate.resolve() if candidate.is_absolute() else (PROJECT_ROOT / candidate).resolve()
         if not resolved.is_relative_to(base):
             raise ValueError("profile path must stay inside profiles/")
         return resolved

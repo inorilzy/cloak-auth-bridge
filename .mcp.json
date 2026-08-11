@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "cloak-auth-bridge": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0",
+        "cloak-auth-bridge-mcp"
+      ]
+    }
+  }
+}

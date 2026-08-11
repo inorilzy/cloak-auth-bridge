@@ -13,33 +13,70 @@
 
 扩展安装时默认具备 `https://*/*` 读取权限，不再要求逐站点“授权并加入白名单”。真正的站点范围由 `sites/` 与 `profiles.json` 双重约束。MCP 工具只返回数量和验证结果，原始 Cookie/Token 不进入 LLM 上下文。
 
-## 本地安装
+## 安装（和 multi-search 一样走 GitHub + uvx）
 
-在 PowerShell 中运行：
+仓库：
+
+https://github.com/inorilzy/cloak-auth-bridge
+
+### Codex / CLI（推荐）
 
 ```powershell
-.\scripts\setup.ps1
+codex mcp add cloak-auth-bridge -- uvx --from git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0 cloak-auth-bridge-mcp
 ```
 
-脚本会在项目内创建 `.venv`，安装 MCP、WebSocket 和官方 `cloakbrowser` Python 包。
+或写入 `~/.codex/config.toml`：
 
-## 唯一推荐入口：MCP
+```toml
+[mcp_servers.cloak-auth-bridge]
+command = "uvx"
+args = [
+  "--from",
+  "git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0",
+  "cloak-auth-bridge-mcp"
+]
+startup_timeout_sec = 60
+tool_timeout_sec = 180
+enabled = true
+```
 
-### Cursor / 兼容客户端
-
-仓库已提供：
+`uvx` 会从 GitHub 拉取包并启动 MCP。首次运行会在用户目录播种配置：
 
 ```text
-.cursor/mcp.json
+~/.cloak-auth-bridge/
+  sites/
+  profiles.json
+  extension/          # 给 Chrome 加载
+  profiles/           # Cloak 持久登录态
+  .auth/
 ```
 
-内容等价于：在项目目录用 venv Python 启动
+也可用环境变量指定数据目录：
 
 ```powershell
+$env:CLOAK_AUTH_BRIDGE_HOME = "D:\cloak-auth-data"
+```
+
+### 从源码本地开发
+
+```powershell
+git clone https://github.com/inorilzy/cloak-auth-bridge.git
+cd cloak-auth-bridge
+.\scripts\setup.ps1
 .\.venv\Scripts\python.exe -m cloak_auth_bridge mcp
 ```
 
-请让 IDE 加载该 MCP 后重启/重载 MCP。成功后：
+Cursor 本地开发可用仓库内 `.cursor/mcp.json`。
+
+## 唯一推荐入口：MCP
+
+`cloak-auth-bridge-mcp` / `python -m cloak_auth_bridge mcp` 同时提供：
+
+1. MCP stdio 工具
+2. 扩展桥 `ws://127.0.0.1:17321`
+3. Cloak Profile 导入 / 校验 / 调试会话
+
+请让 IDE/Codex 加载 MCP 后重启。成功后：
 
 - 扩展可连 `ws://127.0.0.1:17321`
 - Agent 可直接调下方工具

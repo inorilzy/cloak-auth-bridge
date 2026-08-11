@@ -96,9 +96,13 @@ def main(argv: list[str] | None = None) -> None:
         print("可选加固 Token 已复制到剪贴板。默认本机免 Token；仅在启用 CLOAK_AUTH_REQUIRE_TOKEN=1 时需要粘贴到扩展。")
         return
     if args.command == "doctor":
+        from cloak_auth_bridge.config import PROJECT_ROOT, refresh_paths
+
+        refresh_paths()
         registry = Registry.load()
         print(
             f"配置有效：{len(registry.sites)} 个站点，{len(registry.profiles)} 个 Profile。"
+            f" data_root={PROJECT_ROOT}"
             " 默认本机免 Token（loopback trust）。"
         )
         return

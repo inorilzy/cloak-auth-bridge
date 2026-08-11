@@ -1,0 +1,20 @@
+{
+  "id": "xiaohongshu-main",
+  "cookieDomains": [
+    "xiaohongshu.com"
+  ],
+  "origins": [
+    "https://www.xiaohongshu.com"
+  ],
+  "verify": {
+    "url": "https://www.xiaohongshu.com",
+    "finalUrlIncludes": [
+      "xiaohongshu.com"
+    ],
+    "finalUrlExcludes": [
+      "/login",
+      "passport",
+      "accounts.xiaohongshu.com"
+    ]
+  }
+}

@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cloak-auth-bridge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local Chrome-to-CloakBrowser authentication bridge with MCP tools"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "cloakbrowser>=0.5.6,<0.6",
@@ -25,9 +26,21 @@ dev = [
 
 [project.scripts]
 cloak-auth-bridge = "cloak_auth_bridge.main:main"
+cloak-auth-bridge-mcp = "cloak_auth_bridge.main:main"
+
+[project.urls]
+Homepage = "https://github.com/inorilzy/cloak-auth-bridge"
+Repository = "https://github.com/inorilzy/cloak-auth-bridge"
 
 [tool.setuptools.packages.find]
 include = ["cloak_auth_bridge*"]
+
+[tool.setuptools.package-data]
+cloak_auth_bridge = [
+  "defaults/profiles.json",
+  "defaults/sites/*.json",
+  "defaults/extension/*",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cloak Auth Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">LOCAL AUTH BRIDGE</p>
+          <h1>Cloak Auth Bridge</h1>
+        </div>
+        <span id="connection" class="status">读取中</span>
+      </header>
+
+      <section>
+        <h2>本地服务</h2>
+        <label>WebSocket 地址<input id="server-url" type="url" value="ws://127.0.0.1:17321"></label>
+        <label>配对 Token（可选）<input id="pairing-token" type="password" autocomplete="off" placeholder="默认留空：本机免 Token"></label>
+        <label>Chrome Profile 别名<input id="profile-alias" type="text" value="chrome-default"></label>
+        <button id="save-settings" class="secondary">保存并重连</button>
+        <p class="empty">默认只连 <code>ws://127.0.0.1</code>，无需粘贴 Token。填写 Token 可启用额外 HMAC 加固。</p>
+      </section>
+
+      <section>
+        <h2>站点范围</h2>
+        <p class="empty">站点白名单由本地 MCP 的 <code>sites/</code> 与 <code>profiles.json</code> 管理。扩展已默认具备 HTTPS 读取权限，同步时无需再逐站授权。</p>
+      </section>
+
+      <p id="notice" role="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

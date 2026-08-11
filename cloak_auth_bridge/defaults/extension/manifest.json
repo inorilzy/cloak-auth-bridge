@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Cloak Auth Bridge",
+  "description": "将本地 daemon 登记站点的 Chrome 登录态同步给 Cloak Auth Bridge。",
+  "version": "0.2.0",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "cookies",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Cloak Auth Bridge"
+  }
+}

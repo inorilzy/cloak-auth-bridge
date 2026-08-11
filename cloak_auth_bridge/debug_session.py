@@ -11,15 +11,23 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from cloak_auth_bridge.config import AUTH_DIR, PROJECT_ROOT, Registry
+from cloak_auth_bridge import config
+from cloak_auth_bridge.config import Registry
 
 DEFAULT_DEBUG_PORT = 9333
-SESSION_FILE = AUTH_DIR / "debug-session.json"
-STOP_FILE = AUTH_DIR / "debug-session.stop"
+
+
+def _session_file() -> Path:
+    return config.AUTH_DIR / "debug-session.json"
+
+
+def _stop_file() -> Path:
+    return config.AUTH_DIR / "debug-session.stop"
 
 
 @dataclass(frozen=True)
@@ -88,10 +96,10 @@ def _read_cdp_targets(port: int) -> list[dict[str, Any]]:
 
 
 def load_session() -> DebugSession | None:
-    if not SESSION_FILE.exists():
+    if not _session_file().exists():
         return None
     try:
-        data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_session_file().read_text(encoding="utf-8"))
         session = DebugSession.from_dict(data)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -124,15 +132,15 @@ def _pid_running(pid: int) -> bool:
 
 
 def _write_session(session: DebugSession) -> None:
-    AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    SESSION_FILE.write_text(
+    config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    _session_file().write_text(
         json.dumps(session.to_public_dict(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
 
 def _clear_session_files() -> None:
-    for path in (SESSION_FILE, STOP_FILE):
+    for path in (_session_file(), _stop_file()):
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -165,8 +173,8 @@ async def run_holder(profile_id: str, port: int, urls: list[str]) -> int:
     """Long-lived process that owns the single CloakBrowser session."""
     from cloakbrowser import launch_persistent_context_async  # type: ignore[import-untyped]
 
-    AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    STOP_FILE.unlink(missing_ok=True)
+    config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    _stop_file().unlink(missing_ok=True)
 
     registry = Registry.load()
     if profile_id not in registry.profiles:
@@ -212,9 +220,9 @@ async def run_holder(profile_id: str, port: int, urls: list[str]) -> int:
             flush=True,
         )
 
-        while not STOP_FILE.exists():
+        while not _stop_file().exists():
             await asyncio.sleep(0.5)
-            if not SESSION_FILE.exists():
+            if not _session_file().exists():
                 break
     finally:
         try:
@@ -239,9 +247,9 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
         if not url.startswith("https://"):
             raise ValueError(f"only https URLs are allowed: {safe_url(url)}")
 
-    AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    STOP_FILE.unlink(missing_ok=True)
-    SESSION_FILE.unlink(missing_ok=True)
+    config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    _stop_file().unlink(missing_ok=True)
+    _session_file().unlink(missing_ok=True)
 
     cmd = [
         sys.executable,
@@ -262,12 +270,12 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
             getattr(subprocess, "DETACHED_PROCESS", 0)
         )
 
-    log_path = AUTH_DIR / "debug-session.log"
+    log_path = config.AUTH_DIR / "debug-session.log"
     log_handle = log_path.open("w", encoding="utf-8")
     try:
         proc = subprocess.Popen(
             cmd,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(config.PROJECT_ROOT),
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             creationflags=creationflags,
@@ -370,7 +378,7 @@ def list_tabs() -> dict[str, Any]:
 def status() -> dict[str, Any]:
     session = load_session()
     if session is None:
-        stale = SESSION_FILE.exists()
+        stale = _session_file().exists()
         if stale:
             _clear_session_files()
         return {"ok": True, "action": "status", "active": False, "cleaned_stale": stale}
@@ -414,8 +422,8 @@ def close_session() -> dict[str, Any]:
         _clear_session_files()
         return {"ok": True, "action": "close", "active": False}
 
-    AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    STOP_FILE.write_text("stop\n", encoding="utf-8")
+    config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    _stop_file().write_text("stop\n", encoding="utf-8")
 
     deadline = time.time() + 15
     while time.time() < deadline:

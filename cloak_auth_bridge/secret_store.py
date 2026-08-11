@@ -5,10 +5,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from cloak_auth_bridge.config import AUTH_DIR
+from cloak_auth_bridge import config
 
-TOKEN_FILE = AUTH_DIR / "pairing-token.dpapi"
 DESCRIPTION = "Cloak Auth Bridge pairing token"
+
+
+def _token_file() -> Path:
+    return config.AUTH_DIR / "pairing-token.dpapi"
 
 
 def _win32crypt() -> Any:
@@ -19,16 +22,17 @@ def _win32crypt() -> Any:
     return win32crypt
 
 
-def load_or_create_token(path: Path = TOKEN_FILE) -> str:
+def load_or_create_token(path: Path | None = None) -> str:
     win32crypt = _win32crypt()
-    if path.exists():
-        _description, raw = win32crypt.CryptUnprotectData(path.read_bytes(), None, None, None, 0)
+    token_path = path or _token_file()
+    if token_path.exists():
+        _description, raw = win32crypt.CryptUnprotectData(token_path.read_bytes(), None, None, None, 0)
         return raw.decode("utf-8")
 
     token = secrets.token_urlsafe(32)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.parent.mkdir(parents=True, exist_ok=True)
     encrypted = win32crypt.CryptProtectData(token.encode(), DESCRIPTION, None, None, None, 0)
-    path.write_bytes(encrypted)
+    token_path.write_bytes(encrypted)
     return token
 
 

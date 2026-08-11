@@ -1,0 +1,14 @@
+{
+  "id": "bilibili-main",
+  "cookieDomains": [
+    "bilibili.com"
+  ],
+  "origins": [
+    "https://www.bilibili.com"
+  ],
+  "verify": {
+    "url": "https://api.bilibili.com/x/web-interface/nav",
+    "jsonPath": "data.isLogin",
+    "equals": true
+  }
+}
