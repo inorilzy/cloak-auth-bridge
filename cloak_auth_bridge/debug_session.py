@@ -11,8 +11,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -233,6 +233,32 @@ async def run_holder(profile_id: str, port: int, urls: list[str]) -> int:
     return 0
 
 
+def _js_reverse_attach_hint(port: int) -> dict[str, object]:
+    """How to attach js-reverse-mcp to this live Cloak session.
+
+    js-reverse-mcp supports --browserUrl for an existing CDP endpoint and
+    conflicts with --cloak. That is intentional: cloak-auth-bridge already
+    launched CloakBrowser; js-reverse only attaches for DevTools debugging.
+    """
+    cdp = f"http://127.0.0.1:{port}"
+    return {
+        "cdp_http": cdp,
+        "codex_mcp_name": "js-reverse-cloak-auth",
+        "command": "npx",
+        "args": ["-y", "js-reverse-mcp@latest", "--browserUrl", cdp],
+        "workflow": [
+            "1. cloak_debug_open (this server) — starts Cloak on the auth profile + CDP",
+            "2. Use js-reverse-cloak-auth tools (navigate/network/breakpoint/...) against that CDP",
+            "3. cloak_debug_close when finished — releases the Free-plan browser seat",
+        ],
+        "note": (
+            "Do not pass --cloak to js-reverse when attaching: --cloak launches a second "
+            "browser and conflicts with --browserUrl. Auth sync owns the Cloak process."
+        ),
+    }
+
+
+
 def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEFAULT_DEBUG_PORT) -> dict[str, Any]:
     existing = load_session()
     if existing is not None:
@@ -315,6 +341,7 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
         "action": "open",
         "session": session.to_public_dict(),
         "holder_pid": proc.pid,
+        "js_reverse": _js_reverse_attach_hint(session.port),
     }
 
 
@@ -394,6 +421,7 @@ def status() -> dict[str, Any]:
         "session": session.to_public_dict(),
         "browser": browser,
         "port_open": _port_open(session.port),
+        "js_reverse": _js_reverse_attach_hint(session.port),
     }
 
 

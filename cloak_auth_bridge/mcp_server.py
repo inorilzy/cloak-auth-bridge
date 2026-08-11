@@ -81,8 +81,10 @@ def build_server(service: AuthService) -> Server:
             types.Tool(
                 name="cloak_debug_open",
                 description=(
-                    "Open one headed CloakBrowser debug session for an allowlisted profile. "
-                    "Uses a single Free-plan browser session; open more sites with cloak_debug_tab."
+                    "Open one headed CloakBrowser session on an allowlisted auth profile and expose "
+                    "local CDP (default http://127.0.0.1:9333). Attach js-reverse-mcp with "
+                    "--browserUrl (NOT --cloak) so reverse/debug tools share this Cloak process. "
+                    "Returns js_reverse attach hints. Free plan allows only one browser session."
                 ),
                 inputSchema={
                     "type": "object",
@@ -120,7 +122,10 @@ def build_server(service: AuthService) -> Server:
             ),
             types.Tool(
                 name="cloak_debug_status",
-                description="Show whether a Cloak debug session is active.",
+                description=(
+                    "Show whether a Cloak debug session is active, including CDP endpoint and "
+                    "js-reverse --browserUrl attach instructions when running."
+                ),
                 inputSchema={"type": "object", "additionalProperties": False},
             ),
             types.Tool(

@@ -96,11 +96,13 @@ Cursor 本地开发可用仓库内 `.cursor/mcp.json`。
 ### 日常流程
 
 ```text
-IDE 启动 MCP
+IDE 启动 MCP（cloak-auth-bridge + js-reverse-cloak-auth）
   -> 扩展自动连上本机 WS（免 Token）
   -> auth_list_sites 确认 source_connected=true
   -> auth_sync_to_cloak
-  -> cloak_debug_open / cloak_debug_tab（可选）
+  -> cloak_debug_open（启动 Cloak + CDP :9333）
+  -> 用 js-reverse-cloak-auth 做抓包/断点/脚本逆向
+  -> cloak_debug_close
 ```
 
 ## MCP 工具
@@ -112,11 +114,48 @@ IDE 启动 MCP
 - `auth_verify_cloak` — 验证 Profile 登录态
 - `auth_clear_cloak` — 清理（必须 `confirm=true`）
 
-Cloak 调试（单 browser 多 tab，适配 Free 1 并发会话）：
+Cloak 会话（给 js-reverse 挂接调试）：
 
-- `cloak_debug_open` — 打开一个 headed debug session（默认 `shared-main`）
-- `cloak_debug_tab` — 在同一窗口再开 HTTPS tab
+- `cloak_debug_open` — 打开 headed Cloak（默认 `shared-main`）并暴露 CDP `http://127.0.0.1:9333`
+- `cloak_debug_tab` — 同一窗口再开 HTTPS tab
 - `cloak_debug_list` / `cloak_debug_status` / `cloak_debug_close`
+
+### 与 js-reverse-mcp 组合（推荐）
+
+`js-reverse-mcp` 自带完整 CDP 调试工具；`--cloak` 会**自己再起一个** Cloak，和 auth profile 不是同一进程。  
+正确组合是：
+
+1. **auth 桥负责**：同步登录态 + 启动 Cloak（`cloak_debug_open`）
+2. **js-reverse 负责**：挂到该 CDP 做调试（`--browserUrl`，**不要**再加 `--cloak`）
+
+Codex 示例：
+
+```toml
+[mcp_servers.cloak-auth-bridge]
+command = "uvx"
+args = ["--from", "git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0", "cloak-auth-bridge-mcp"]
+
+[mcp_servers.js-reverse-cloak-auth]
+command = "npx"
+args = ["-y", "js-reverse-mcp@latest", "--browserUrl", "http://127.0.0.1:9333"]
+```
+
+工作流：
+
+```text
+auth_sync_to_cloak(site, profile)
+cloak_debug_open(profile, urls=[...])   # 返回 cdp_http / js_reverse 提示
+# 然后用 js-reverse-cloak-auth：
+#   navigate_page / list_network_requests / search_in_sources /
+#   set_breakpoint_on_text / evaluate_script / take_screenshot ...
+cloak_debug_close
+```
+
+注意：
+
+- Free 计划同时只能 1 个 browser：先 `cloak_debug_open`，再让 js-reverse attach，不要并行再 `--cloak` 起第二个。
+- `cloak_debug_open` 占用 profile 目录锁时，不要同时 CLI 再 launch 同一 profile。
+- `js-reverse` 的 `--cloak` 与 `--browserUrl` 互斥；挂接模式只用 `--browserUrl`。
 
 同步示例：
 
@@ -124,18 +163,18 @@ Cloak 调试（单 browser 多 tab，适配 Free 1 并发会话）：
 {
   "name": "auth_sync_to_cloak",
   "arguments": {
-    "site_id": "youtube-main",
+    "site_id": "xiaohongshu-main",
     "target_profile": "shared-main",
     "mode": "merge"
   }
 }
 ```
 
-调试示例：
+打开 Cloak 供 js-reverse 挂接：
 
 ```json
-{"name": "cloak_debug_open", "arguments": {"profile_id": "shared-main", "url": ["https://www.youtube.com"]}}
-{"name": "cloak_debug_tab", "arguments": {"url": "https://www.bilibili.com"}}
+{"name": "cloak_debug_open", "arguments": {"profile_id": "shared-main", "url": ["https://www.xiaohongshu.com"]}}
+{"name": "cloak_debug_status", "arguments": {}}
 {"name": "cloak_debug_close", "arguments": {}}
 ```
 
