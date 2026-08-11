@@ -29,10 +29,9 @@ function randomToken(byteLength = 24) {
 }
 
 async function loadSettings() {
-  const stored = await chrome.storage.local.get(["settings", "sites"]);
+  const stored = await chrome.storage.local.get(["settings"]);
   return {
-    settings: { ...DEFAULT_SETTINGS, ...(stored.settings ?? {}) },
-    sites: stored.sites ?? {}
+    settings: { ...DEFAULT_SETTINGS, ...(stored.settings ?? {}) }
   };
 }
 
@@ -91,13 +90,12 @@ async function handleCapture(message, responseSocket) {
   const request = validateCaptureRequest(message);
   await rememberNonce(request.nonce);
 
-  const { settings, sites } = await loadSettings();
-  const site = sites[request.siteId];
-  if (!site) {
-    throw new Error(`站点 ${request.siteId} 不在扩展白名单中`);
-  }
-
-  const payload = await captureAuthBundle(site, settings.profileAlias);
+  const { settings } = await loadSettings();
+  const payload = await captureAuthBundle({
+    id: request.siteId,
+    cookieDomains: request.cookieDomains,
+    origins: request.origins
+  }, settings.profileAlias);
   send({
     id: request.id,
     type: "capture_auth_result",
@@ -176,10 +174,6 @@ async function connect() {
   if (generation !== connectionGeneration) {
     return;
   }
-  if (settings.pairingToken.length < 16) {
-    setConnectionState("unconfigured", "请先在扩展弹窗中设置配对 Token");
-    return;
-  }
 
   let url;
   try {
@@ -193,6 +187,12 @@ async function connect() {
     return;
   }
 
+  // Token is optional. Empty token uses loopback-trust mode with the local MCP/bridge.
+  if (settings.pairingToken && settings.pairingToken.length > 0 && settings.pairingToken.length < 16) {
+    setConnectionState("error", "若填写配对 Token，长度至少 16");
+    return;
+  }
+
   setConnectionState("connecting");
   const connectingSocket = new WebSocket(url.href);
   socket = connectingSocket;
@@ -203,7 +203,8 @@ async function connect() {
         return;
       }
       currentChallenge = randomToken();
-      currentPairingToken = settings.pairingToken;
+      currentPairingToken = settings.pairingToken || null;
+      currentServerChallenge = null;
       if (generation !== connectionGeneration || socket !== connectingSocket) {
         connectingSocket.close();
         return;

@@ -19,11 +19,13 @@ HOSTNAME_PATTERN = re.compile(
 
 
 class VerifyConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     url: str
-    json_path: str = Field(alias="jsonPath")
-    equals: bool | int | str
+    json_path: str | None = Field(default=None, alias="jsonPath")
+    equals: bool | int | str | None = None
+    final_url_includes: list[str] = Field(default_factory=list, alias="finalUrlIncludes")
+    final_url_excludes: list[str] = Field(default_factory=list, alias="finalUrlExcludes")
 
     @field_validator("url")
     @classmethod
@@ -31,6 +33,18 @@ class VerifyConfig(BaseModel):
         if not value.startswith("https://"):
             raise ValueError("verify.url must use HTTPS")
         return value
+
+    @model_validator(mode="after")
+    def require_json_or_url_checks(self) -> VerifyConfig:
+        has_json = self.json_path is not None
+        has_url_check = bool(self.final_url_includes or self.final_url_excludes)
+        if has_json and self.equals is None:
+            raise ValueError("verify.equals is required when jsonPath is set")
+        if not has_json and not has_url_check:
+            raise ValueError("verify requires jsonPath/equals or finalUrlIncludes/finalUrlExcludes")
+        if has_json and has_url_check:
+            raise ValueError("verify cannot combine jsonPath with finalUrl checks")
+        return self
 
 
 class SiteConfig(BaseModel):

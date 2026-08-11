@@ -6,5 +6,40 @@
     ],
     "dedicated": true,
     "headless": false
+  },
+  "x-main": {
+    "path": "profiles/x-main",
+    "allowedSites": [
+      "x-main"
+    ],
+    "dedicated": true,
+    "headless": false
+  },
+  "youtube-main": {
+    "path": "profiles/youtube-main",
+    "allowedSites": [
+      "youtube-main"
+    ],
+    "dedicated": true,
+    "headless": false
+  },
+  "xiaohongshu-main": {
+    "path": "profiles/xiaohongshu-main",
+    "allowedSites": [
+      "xiaohongshu-main"
+    ],
+    "dedicated": true,
+    "headless": false
+  },
+  "shared-main": {
+    "path": "profiles/shared-main",
+    "allowedSites": [
+      "bilibili-main",
+      "x-main",
+      "youtube-main",
+      "xiaohongshu-main"
+    ],
+    "dedicated": false,
+    "headless": false
   }
 }

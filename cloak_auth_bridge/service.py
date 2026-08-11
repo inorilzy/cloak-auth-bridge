@@ -52,7 +52,7 @@ class AuthService:
             raise ValueError("mode must be merge or replace")
         site, profile = self.registry.target(site_id, target_profile)
         async with self._limited_operation():
-            bundle = await self.bridge.capture(site_id)
+            bundle = await self.bridge.capture(site.id, site.cookie_domains, site.origins)
             validate_bundle(bundle, site)
             result = await self._safe_profile_call(
                 self.profiles.import_auth(site, target_profile, profile, bundle, mode),

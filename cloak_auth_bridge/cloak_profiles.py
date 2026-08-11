@@ -132,10 +132,26 @@ class CloakProfileManager:
         page = await context.new_page()
         try:
             response = await page.goto(site.verify.url, wait_until="domcontentloaded")
-            if response is None or not response.ok:
+            if response is None:
+                return False
+
+            # Allow a short settle for auth redirects (e.g. Google account chooser).
+            try:
+                await page.wait_for_load_state("networkidle", timeout=3000)
+            except TimeoutError:
+                pass
+
+            final_url = page.url
+            if site.verify.final_url_includes or site.verify.final_url_excludes:
+                includes_ok = all(token in final_url for token in site.verify.final_url_includes)
+                excludes_ok = all(token not in final_url for token in site.verify.final_url_excludes)
+                # For URL-mode checks, staying off login/chooser pages is the signal.
+                return includes_ok and excludes_ok
+
+            if not response.ok:
                 return False
             body = await page.text_content("body")
-            if body is None:
+            if body is None or site.verify.json_path is None:
                 return False
             value: Any = json.loads(body)
             for part in site.verify.json_path.split("."):

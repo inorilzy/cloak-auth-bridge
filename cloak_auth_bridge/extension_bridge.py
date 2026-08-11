@@ -54,8 +54,16 @@ class CaptureResultMessage(BaseModel):
 
 
 class ExtensionBridge:
-    def __init__(self, pairing_token: str) -> None:
+    def __init__(
+        self,
+        pairing_token: str | None = None,
+        *,
+        allow_loopback_trust: bool = True,
+    ) -> None:
+        # Loopback trust is the default for local MCP: only 127.0.0.1 may connect,
+        # so a manual pairing token is optional hardening rather than required UX.
         self._pairing_token = pairing_token
+        self._allow_loopback_trust = allow_loopback_trust
         self._connection: WebSocketConnection | None = None
         self._extension_id: str | None = None
         self._pending: dict[
@@ -80,43 +88,59 @@ class ExtensionBridge:
             raise ValueError("invalid extension hello")
 
         server_challenge = secrets.token_urlsafe(24)
-        proof_payload = f"{hello.challenge}:{server_challenge}"
-        await connection.send(
-            json.dumps(
-                {
-                    "type": "hello_challenge",
-                    "client_challenge": hello.challenge,
-                    "server_challenge": server_challenge,
-                    "proof": create_proof(self._pairing_token, "server", proof_payload),
-                }
+        if self._allow_loopback_trust and not self._pairing_token:
+            await connection.send(
+                json.dumps(
+                    {
+                        "type": "hello_ack",
+                        "ok": True,
+                        "mode": "loopback_trust",
+                        "client_challenge": hello.challenge,
+                        "server_challenge": server_challenge,
+                    }
+                )
             )
-        )
+        else:
+            if not self._pairing_token:
+                raise ValueError("pairing token required when loopback trust is disabled")
+            proof_payload = f"{hello.challenge}:{server_challenge}"
+            await connection.send(
+                json.dumps(
+                    {
+                        "type": "hello_challenge",
+                        "client_challenge": hello.challenge,
+                        "server_challenge": server_challenge,
+                        "proof": create_proof(self._pairing_token, "server", proof_payload),
+                    }
+                )
+            )
 
-        raw_response = await asyncio.wait_for(anext(iterator), timeout=10)
-        response = HelloResponseMessage.model_validate_json(raw_response)
-        if (
-            response.type != "hello_response"
-            or response.client_challenge != hello.challenge
-            or response.server_challenge != server_challenge
-            or not verify_proof(
-                self._pairing_token,
-                "client",
-                proof_payload,
-                response.proof,
-            )
-        ):
-            raise ValueError("extension pairing authentication failed")
+            raw_response = await asyncio.wait_for(anext(iterator), timeout=10)
+            response = HelloResponseMessage.model_validate_json(raw_response)
+            if (
+                response.type != "hello_response"
+                or response.client_challenge != hello.challenge
+                or response.server_challenge != server_challenge
+                or not verify_proof(
+                    self._pairing_token,
+                    "client",
+                    proof_payload,
+                    response.proof,
+                )
+            ):
+                raise ValueError("extension pairing authentication failed")
 
-        await connection.send(
-            json.dumps(
-                {
-                    "type": "hello_ack",
-                    "ok": True,
-                    "client_challenge": hello.challenge,
-                    "server_challenge": server_challenge,
-                }
+            await connection.send(
+                json.dumps(
+                    {
+                        "type": "hello_ack",
+                        "ok": True,
+                        "mode": "token",
+                        "client_challenge": hello.challenge,
+                        "server_challenge": server_challenge,
+                    }
+                )
             )
-        )
 
         async with self._connection_lock:
             previous = self._connection
@@ -127,7 +151,13 @@ class ExtensionBridge:
                 self._fail_pending(ConnectionError("Chrome extension connection was replaced"))
                 await previous.close(code=1000, reason="replaced by a new authenticated connection")
 
-        LOGGER.info("Chrome extension connected: id=%s profile=%s", hello.extension_id, hello.profile_alias)
+        mode = "loopback_trust" if self._allow_loopback_trust and not self._pairing_token else "token"
+        LOGGER.info(
+            "Chrome extension connected: id=%s profile=%s mode=%s",
+            hello.extension_id,
+            hello.profile_alias,
+            mode,
+        )
         try:
             async for raw_message in iterator:
                 await self._handle_message(connection, raw_message)
@@ -171,10 +201,20 @@ class ExtensionBridge:
             return
         future.set_result(result.payload)
 
-    async def capture(self, site_id: str, timeout: float = 60) -> AuthBundle:
+    async def capture(
+        self,
+        site_id: str,
+        cookie_domains: list[str],
+        origins: list[str],
+        timeout: float = 60,
+    ) -> AuthBundle:
         connection = self._connection
         if connection is None:
             raise RuntimeError("Chrome extension is not connected")
+        if not cookie_domains:
+            raise ValueError("cookie_domains must not be empty")
+        if not origins:
+            raise ValueError("origins must not be empty")
 
         request_id = str(uuid.uuid4())
         nonce = secrets.token_urlsafe(24)
@@ -187,6 +227,8 @@ class ExtensionBridge:
                         "id": request_id,
                         "type": "capture_auth",
                         "site_id": site_id,
+                        "cookie_domains": list(cookie_domains),
+                        "origins": list(origins),
                         "nonce": nonce,
                     }
                 )

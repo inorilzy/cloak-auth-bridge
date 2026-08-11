@@ -1,0 +1,23 @@
+{
+  "id": "youtube-main",
+  "cookieDomains": [
+    "youtube.com",
+    "google.com"
+  ],
+  "origins": [
+    "https://www.youtube.com"
+  ],
+  "verify": {
+    "url": "https://www.youtube.com/account",
+    "finalUrlIncludes": [
+      "youtube.com/account"
+    ],
+    "finalUrlExcludes": [
+      "accounts.google.com",
+      "ServiceLogin",
+      "signin/identifier",
+      "signin/accountchooser",
+      "/signin"
+    ]
+  }
+}

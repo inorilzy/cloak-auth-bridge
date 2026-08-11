@@ -19,22 +19,15 @@
       <section>
         <h2>本地服务</h2>
         <label>WebSocket 地址<input id="server-url" type="url" value="ws://127.0.0.1:17321"></label>
-        <label>配对 Token<input id="pairing-token" type="password" autocomplete="off" placeholder="由本地服务生成"></label>
+        <label>配对 Token（可选）<input id="pairing-token" type="password" autocomplete="off" placeholder="默认留空：本机免 Token"></label>
         <label>Chrome Profile 别名<input id="profile-alias" type="text" value="chrome-default"></label>
         <button id="save-settings" class="secondary">保存并重连</button>
+        <p class="empty">默认只连 <code>ws://127.0.0.1</code>，无需粘贴 Token。填写 Token 可启用额外 HMAC 加固。</p>
       </section>
 
       <section>
-        <h2>登记当前站点</h2>
-        <label>站点 ID<input id="site-id" type="text" placeholder="example-main"></label>
-        <label>Cookie 域名（每行一个）<textarea id="cookie-domains" rows="2"></textarea></label>
-        <label>Origins（每行一个）<textarea id="origins" rows="3"></textarea></label>
-        <button id="save-site">授权并加入白名单</button>
-      </section>
-
-      <section>
-        <div class="section-heading"><h2>白名单</h2><span id="site-count">0</span></div>
-        <div id="sites" class="sites"><p class="empty">尚未登记站点</p></div>
+        <h2>站点范围</h2>
+        <p class="empty">站点白名单由本地 MCP 的 <code>sites/</code> 与 <code>profiles.json</code> 管理。扩展已默认具备 HTTPS 读取权限，同步时无需再逐站授权。</p>
       </section>
 
       <p id="notice" role="status" aria-live="polite"></p>
@@ -42,4 +35,3 @@
     <script type="module" src="popup.js"></script>
   </body>
 </html>
-

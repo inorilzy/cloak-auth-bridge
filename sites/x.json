@@ -1,0 +1,20 @@
+{
+  "id": "x-main",
+  "cookieDomains": [
+    "x.com",
+    "twitter.com"
+  ],
+  "origins": [
+    "https://x.com"
+  ],
+  "verify": {
+    "url": "https://x.com/home",
+    "finalUrlIncludes": [
+      "x.com"
+    ],
+    "finalUrlExcludes": [
+      "/i/flow/login",
+      "/login"
+    ]
+  }
+}

@@ -13,7 +13,9 @@ class FakeBridge:
     def __init__(self) -> None:
         self.capture_calls = 0
 
-    async def capture(self, site_id: str) -> AuthBundle:
+    async def capture(self, site_id: str, cookie_domains: list[str], origins: list[str]) -> AuthBundle:
+        assert cookie_domains
+        assert origins
         self.capture_calls += 1
         return AuthBundle.model_validate(
             {

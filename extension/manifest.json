@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Cloak Auth Bridge",
-  "description": "将白名单站点的 Chrome 登录态安全同步给本地 Cloak Auth Bridge。",
-  "version": "0.1.0",
+  "description": "将本地 daemon 登记站点的 Chrome 登录态同步给 Cloak Auth Bridge。",
+  "version": "0.2.0",
   "minimum_chrome_version": "116",
   "permissions": [
     "cookies",
@@ -10,7 +10,7 @@
     "storage",
     "tabs"
   ],
-  "optional_host_permissions": [
+  "host_permissions": [
     "https://*/*"
   ],
   "background": {
@@ -22,4 +22,3 @@
     "default_title": "Cloak Auth Bridge"
   }
 }
-

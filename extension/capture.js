@@ -98,26 +98,134 @@ async function captureOriginStorage(expectedOrigin) {
   }
 }
 
-async function captureCookies(cookieDomains) {
-  const collected = new Map();
-  for (const domain of cookieDomains) {
-    const cookies = await chrome.cookies.getAll({ domain });
-    for (const cookie of cookies) {
-      const partition = cookie.partitionKey
-        ? JSON.stringify(cookie.partitionKey)
-        : "";
-      const key = [cookie.name, cookie.domain, cookie.path, cookie.storeId, partition].join("|");
-      collected.set(key, cookie);
+function cookieKey(cookie) {
+  const partition = cookie.partitionKey ? JSON.stringify(cookie.partitionKey) : "";
+  return [cookie.name, cookie.domain, cookie.path, cookie.storeId ?? "", partition].join("|");
+}
+
+function domainMatchesAllowlist(cookieDomain, allowedDomains) {
+  const domain = String(cookieDomain || "").toLowerCase().replace(/^\./, "");
+  return allowedDomains.some((allowed) => {
+    const base = String(allowed || "").toLowerCase().replace(/^\./, "");
+    return domain === base || domain.endsWith(`.${base}`);
+  });
+}
+
+function buildCookieQueryUrls(cookieDomains, origins) {
+  const urls = new Set();
+  for (const origin of origins || []) {
+    urls.add(origin.endsWith("/") ? origin : `${origin}/`);
+  }
+  for (const domain of cookieDomains || []) {
+    const host = String(domain || "").replace(/^\./, "");
+    if (!host) continue;
+    urls.add(`https://${host}/`);
+    urls.add(`https://www.${host}/`);
+    if (host === "google.com" || host.endsWith(".google.com")) {
+      urls.add("https://accounts.google.com/");
+      urls.add("https://www.google.com/");
+    }
+    if (host === "youtube.com" || host.endsWith(".youtube.com")) {
+      urls.add("https://www.youtube.com/");
+      urls.add("https://youtube.com/");
     }
   }
+  return [...urls];
+}
+
+async function queryCookies(query) {
+  try {
+    return await chrome.cookies.getAll(query);
+  } catch {
+    return [];
+  }
+}
+
+async function captureCookies(cookieDomains, origins = []) {
+  const allowed = (cookieDomains || []).map((item) => String(item).toLowerCase().replace(/^\./, ""));
+  const collected = new Map();
+
+  const addCookies = (cookies) => {
+    for (const cookie of cookies) {
+      if (!domainMatchesAllowlist(cookie.domain, allowed)) {
+        continue;
+      }
+      collected.set(cookieKey(cookie), cookie);
+    }
+  };
+
+  const stores = await chrome.cookies.getAllCookieStores().catch(() => []);
+  const storeIds = stores.length > 0 ? stores.map((store) => store.id) : [undefined];
+  const criticalNames = [
+    "SID", "HSID", "SSID", "APISID", "SAPISID", "SIDCC", "LOGIN_INFO",
+    "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID", "__Secure-3PAPISID",
+    "__Secure-1PSIDTS", "__Secure-3PSIDTS", "__Secure-1PSIDCC", "__Secure-3PSIDCC"
+  ];
+  const criticalUrls = buildCookieQueryUrls(allowed, origins);
+
+  for (const storeId of storeIds) {
+    const storeQuery = storeId === undefined ? {} : { storeId };
+
+    for (const domain of allowed) {
+      addCookies(await queryCookies({ ...storeQuery, domain }));
+      addCookies(await queryCookies({ ...storeQuery, domain: `.${domain}` }));
+    }
+
+    for (const url of criticalUrls) {
+      addCookies(await queryCookies({ ...storeQuery, url }));
+    }
+
+    for (const origin of origins || []) {
+      let topLevelSite = origin;
+      try {
+        topLevelSite = new URL(origin).origin;
+      } catch {
+        continue;
+      }
+      addCookies(await queryCookies({
+        ...storeQuery,
+        partitionKey: { topLevelSite }
+      }));
+      addCookies(await queryCookies({
+        ...storeQuery,
+        partitionKey: { topLevelSite, hasCrossSiteAncestor: true }
+      }));
+      addCookies(await queryCookies({
+        ...storeQuery,
+        partitionKey: { topLevelSite, hasCrossSiteAncestor: false }
+      }));
+    }
+
+    addCookies(await queryCookies({ ...storeQuery }));
+
+    for (const url of criticalUrls) {
+      for (const name of criticalNames) {
+        try {
+          const cookie = await chrome.cookies.get({
+            url,
+            name,
+            ...(storeId === undefined ? {} : { storeId })
+          });
+          if (cookie) {
+            addCookies([cookie]);
+          }
+        } catch {
+          // Ignore unsupported query shapes per Chrome version.
+        }
+      }
+    }
+  }
+
   return [...collected.values()];
 }
 
 export async function captureAuthBundle(site, sourceProfile) {
-  const [cookies, origins] = await Promise.all([
-    captureCookies(site.cookieDomains),
-    Promise.all(site.origins.map(captureOriginStorage))
-  ]);
+  // Open origins first so first-party context exists, then collect cookies.
+  const origins = [];
+  for (const origin of site.origins) {
+    origins.push(await captureOriginStorage(origin));
+  }
+  const cookies = await captureCookies(site.cookieDomains, site.origins);
 
   return {
     version: 1,
