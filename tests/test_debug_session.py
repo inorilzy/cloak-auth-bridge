@@ -1,4 +1,4 @@
-from cloak_auth_bridge.debug_session import safe_url
+from cloak_browser_auth.debug_session import safe_url
 
 
 def test_safe_url_strips_query_and_fragment() -> None:

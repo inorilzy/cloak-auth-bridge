@@ -2,9 +2,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from cloak_auth_bridge.config import Registry
-from cloak_auth_bridge.models import AuthBundle, ClearResult, ImportResult
-from cloak_auth_bridge.service import AuthService
+from cloak_browser_auth.config import Registry
+from cloak_browser_auth.models import AuthBundle, ClearResult, ImportResult
+from cloak_browser_auth.service import AuthService
 
 
 class FakeBridge:

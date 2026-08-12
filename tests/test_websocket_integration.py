@@ -5,9 +5,9 @@ import pytest
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from cloak_auth_bridge.crypto import create_proof, verify_proof
-from cloak_auth_bridge.extension_bridge import ExtensionBridge
-from cloak_auth_bridge.websocket_server import ExtensionWebSocketServer
+from cloak_browser_auth.crypto import create_proof, verify_proof
+from cloak_browser_auth.extension_bridge import ExtensionBridge
+from cloak_browser_auth.websocket_server import ExtensionWebSocketServer
 
 
 async def _hello(websocket, challenge: str = "abcdefghijklmnop") -> None:

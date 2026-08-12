@@ -10,8 +10,8 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from cloak_auth_bridge.crypto import create_proof, verify_proof
-from cloak_auth_bridge.models import AuthBundle
+from cloak_browser_auth.crypto import create_proof, verify_proof
+from cloak_browser_auth.models import AuthBundle
 
 LOGGER = logging.getLogger(__name__)
 

@@ -1,9 +1,9 @@
-# Cloak Auth Bridge
+# Cloak Browser Auth
 
 一个本地认证桥：Chrome MV3 扩展在配对后，按本地登记的站点配置采集 Cookies 和 `localStorage`，通过本机 WebSocket 交给 **同一个 MCP 进程**，再注入 CloakBrowser 持久 Profile。
 
 **推荐形态：MCP = 唯一常驻入口。**  
-`python -m cloak_auth_bridge mcp` 同时提供：
+`python -m cloak_browser_auth mcp` 同时提供：
 
 1. MCP stdio 工具（给 IDE / Agent）
 2. 扩展桥 `ws://127.0.0.1:17321`
@@ -17,23 +17,23 @@
 
 仓库：
 
-https://github.com/inorilzy/cloak-auth-bridge
+https://github.com/inorilzy/cloak-browser-auth
 
 ### Codex / CLI（推荐）
 
 ```powershell
-codex mcp add cloak-auth-bridge -- uvx --from git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0 cloak-auth-bridge-mcp
+codex mcp add cloak-browser-auth -- uvx --from git+https://github.com/inorilzy/cloak-browser-auth.git@v0.3.0 cloak-browser-auth-mcp
 ```
 
 或写入 `~/.codex/config.toml`：
 
 ```toml
-[mcp_servers.cloak-auth-bridge]
+[mcp_servers.cloak-browser-auth]
 command = "uvx"
 args = [
   "--from",
-  "git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0",
-  "cloak-auth-bridge-mcp"
+  "git+https://github.com/inorilzy/cloak-browser-auth.git@v0.3.0",
+  "cloak-browser-auth-mcp"
 ]
 startup_timeout_sec = 60
 tool_timeout_sec = 180
@@ -43,7 +43,7 @@ enabled = true
 `uvx` 会从 GitHub 拉取包并启动 MCP。首次运行会在用户目录播种配置：
 
 ```text
-~/.cloak-auth-bridge/
+~/.cloak-browser-auth/
   sites/
   profiles.json
   extension/          # 给 Chrome 加载
@@ -54,23 +54,23 @@ enabled = true
 也可用环境变量指定数据目录：
 
 ```powershell
-$env:CLOAK_AUTH_BRIDGE_HOME = "D:\cloak-auth-data"
+$env:CLOAK_BROWSER_AUTH_HOME = "D:\cloak-auth-data"
 ```
 
 ### 从源码本地开发
 
 ```powershell
-git clone https://github.com/inorilzy/cloak-auth-bridge.git
-cd cloak-auth-bridge
+git clone https://github.com/inorilzy/cloak-browser-auth.git
+cd cloak-browser-auth
 .\scripts\setup.ps1
-.\.venv\Scripts\python.exe -m cloak_auth_bridge mcp
+.\.venv\Scripts\python.exe -m cloak_browser_auth mcp
 ```
 
 Cursor 本地开发可用仓库内 `.cursor/mcp.json`。
 
 ## 唯一推荐入口：MCP
 
-`cloak-auth-bridge-mcp` / `python -m cloak_auth_bridge mcp` 同时提供：
+`cloak-browser-auth-mcp` / `python -m cloak_browser_auth mcp` 同时提供：
 
 1. MCP stdio 工具
 2. 扩展桥 `ws://127.0.0.1:17321`
@@ -91,12 +91,12 @@ Cursor 本地开发可用仓库内 `.cursor/mcp.json`。
 3. Token 留空，点「保存并重连」
 4. 顶部显示「已连接」即可
 
-可选加固：设置环境变量 `CLOAK_AUTH_REQUIRE_TOKEN=1` 后，再用 `.\scripts\pair.ps1` 复制 Token 粘贴到扩展。Token 不要发给 LLM。
+可选加固：设置环境变量 `CLOAK_BROWSER_AUTH_REQUIRE_TOKEN=1` 后，再用 `.\scripts\pair.ps1` 复制 Token 粘贴到扩展。Token 不要发给 LLM。
 
 ### 日常流程
 
 ```text
-IDE 启动 MCP（仅 cloak-auth-bridge）
+IDE 启动 MCP（仅 cloak-browser-auth）
   -> 扩展自动连上本机 WS（免 Token）
   -> auth_sync_to_cloak
   -> cloak_debug_open（启动 Cloak + CDP，并自动 reverse_attach）
@@ -202,7 +202,7 @@ profiles.json
 IDE MCP client
     │ stdio
     ▼
-cloak_auth_bridge mcp          ← 唯一常驻
+cloak_browser_auth mcp          ← 唯一常驻
     ├─ WebSocket 127.0.0.1:17321  ← Chrome 扩展
     ├─ AuthService sync/verify
     └─ cloakbrowser → profiles/
@@ -211,7 +211,7 @@ cloak_auth_bridge mcp          ← 唯一常驻
 独立 `serve` 仅作应急（无 MCP 客户端时）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m cloak_auth_bridge serve
+.\.venv\Scripts\python.exe -m cloak_browser_auth serve
 ```
 
 有 MCP 时不要并行 `serve`。
@@ -223,10 +223,10 @@ cloak_auth_bridge mcp          ← 唯一常驻
 与 MCP 调试工具等价，便于终端手调：
 
 ```powershell
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-open --profile shared-main --url https://www.youtube.com
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-tab https://x.com/home
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-list
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-close
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-open --profile shared-main --url https://www.youtube.com
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-tab https://x.com/home
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-list
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-close
 ```
 
 默认 CDP：`127.0.0.1:9333`；状态文件：`.auth/debug-session.json`。
@@ -235,7 +235,7 @@ cloak_auth_bridge mcp          ← 唯一常驻
 
 1. Chrome 打开 `chrome://extensions`，启用“开发者模式”。
 2. “加载已解压的扩展程序”，选择本仓库 `extension` 目录。
-3. 确保 IDE 已启动本项目的 `cloak-auth-bridge` MCP（或临时 `serve`）。
+3. 确保 IDE 已启动本项目的 `cloak-browser-auth` MCP（或临时 `serve`）。
 4. `.\scripts\pair.ps1`，在扩展里粘贴 Token 并保存，确认“已连接”。
 
 扩展默认申请 `https://*/*`，只支持 HTTPS，只允许连接 `ws://127.0.0.1`。
@@ -263,7 +263,7 @@ cloak_auth_bridge mcp          ← 唯一常驻
 
 ```powershell
 .\scripts\start.ps1
-.\.venv\Scripts\python.exe -m cloak_auth_bridge doctor
+.\.venv\Scripts\python.exe -m cloak_browser_auth doctor
 .\.venv\Scripts\python.exe -m pytest -q
 npm test
 ```

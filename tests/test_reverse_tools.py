@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from cloak_auth_bridge import mcp_server
-from cloak_auth_bridge.reverse_session import ReverseSession, _safe_url
+from cloak_browser_auth import mcp_server
+from cloak_browser_auth.reverse_session import ReverseSession, _safe_url
 
 REQUIRED_REVERSE_TOOLS = {
     "reverse_attach",
@@ -47,7 +47,7 @@ def test_mcp_source_registers_js_reverse_equivalent_tools() -> None:
 
 
 def SESSION_STATUS_DEFAULT_INACTIVE() -> bool:
-    from cloak_auth_bridge.reverse_session import SESSION
+    from cloak_browser_auth.reverse_session import SESSION
 
     status = SESSION.status()
     return status["ok"] is True and status["active"] is False

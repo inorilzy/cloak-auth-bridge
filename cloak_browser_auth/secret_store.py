@@ -5,9 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from cloak_auth_bridge import config
+from cloak_browser_auth import config
 
-DESCRIPTION = "Cloak Auth Bridge pairing token"
+DESCRIPTION = "Cloak Browser Auth pairing token"
 
 
 def _token_file() -> Path:

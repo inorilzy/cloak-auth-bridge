@@ -9,9 +9,9 @@ from mcp import types
 from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
-from cloak_auth_bridge import __version__, debug_session
-from cloak_auth_bridge.reverse_session import SESSION
-from cloak_auth_bridge.service import AuthService
+from cloak_browser_auth import __version__, debug_session
+from cloak_browser_auth.reverse_session import SESSION
+from cloak_browser_auth.service import AuthService
 
 
 def _json_content(result: dict[str, Any]) -> list[types.TextContent]:
@@ -23,7 +23,7 @@ def _tool(name: str, description: str, schema: dict[str, Any]) -> types.Tool:
 
 
 def build_server(service: AuthService) -> Server:
-    server = Server("cloak-auth-bridge")
+    server = Server("cloak-browser-auth")
 
     empty = {"type": "object", "additionalProperties": False}
 
@@ -568,7 +568,7 @@ async def run_stdio(server: Server) -> None:
             read_stream,
             write_stream,
             InitializationOptions(
-                server_name="cloak-auth-bridge",
+                server_name="cloak-browser-auth",
                 server_version=__version__,
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),

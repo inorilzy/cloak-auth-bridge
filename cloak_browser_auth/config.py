@@ -25,12 +25,12 @@ def resolve_data_root() -> Path:
     """Resolve runtime data root for sites/profiles/auth/profile storage.
 
     Priority:
-    1. CLOAK_AUTH_BRIDGE_HOME
+    1. CLOAK_BROWSER_AUTH_HOME
     2. Current working directory when it is a checkout (has sites/ + profiles.json)
     3. Parent of package when running from a source checkout
-    4. ~/.cloak-auth-bridge (seeded from packaged defaults on first use)
+    4. ~/.cloak-browser-auth (seeded from packaged defaults on first use)
     """
-    env_home = os.environ.get("CLOAK_AUTH_BRIDGE_HOME", "").strip()
+    env_home = os.environ.get("CLOAK_BROWSER_AUTH_HOME", "").strip()
     if env_home:
         root = Path(env_home).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
@@ -45,7 +45,7 @@ def resolve_data_root() -> Path:
     if _looks_like_project_root(source_root):
         return source_root
 
-    root = (Path.home() / ".cloak-auth-bridge").resolve()
+    root = (Path.home() / ".cloak-browser-auth").resolve()
     root.mkdir(parents=True, exist_ok=True)
     ensure_user_data(root)
     return root

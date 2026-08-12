@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "cloak-auth-bridge": {
+    "cloak-browser-auth": {
       "command": ".venv/Scripts/python.exe",
       "args": [
         "-m",
-        "cloak_auth_bridge",
+        "cloak_browser_auth",
         "mcp"
       ]
     }

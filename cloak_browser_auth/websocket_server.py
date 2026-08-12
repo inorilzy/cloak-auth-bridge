@@ -7,7 +7,7 @@ from typing import Any
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
-from cloak_auth_bridge.extension_bridge import ExtensionBridge
+from cloak_browser_auth.extension_bridge import ExtensionBridge
 
 LOGGER = logging.getLogger(__name__)
 

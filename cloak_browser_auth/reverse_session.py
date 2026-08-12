@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from cloak_auth_bridge import config, debug_session
+from cloak_browser_auth import config, debug_session
 
 DEFAULT_CDP = "http://127.0.0.1:9333"
 

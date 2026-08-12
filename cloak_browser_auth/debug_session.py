@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from cloak_auth_bridge import config
-from cloak_auth_bridge.config import Registry
+from cloak_browser_auth import config
+from cloak_browser_auth.config import Registry
 
 DEFAULT_DEBUG_PORT = 9333
 
@@ -237,7 +237,7 @@ def _js_reverse_attach_hint(port: int) -> dict[str, object]:
     """How to attach js-reverse-mcp to this live Cloak session.
 
     js-reverse-mcp supports --browserUrl for an existing CDP endpoint and
-    conflicts with --cloak. That is intentional: cloak-auth-bridge already
+    conflicts with --cloak. That is intentional: cloak-browser-auth already
     launched CloakBrowser; js-reverse only attaches for DevTools debugging.
     """
     cdp = f"http://127.0.0.1:{port}"
@@ -280,7 +280,7 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
     cmd = [
         sys.executable,
         "-m",
-        "cloak_auth_bridge",
+        "cloak_browser_auth",
         "debug-hold",
         "--profile",
         profile_id,

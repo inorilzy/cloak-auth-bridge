@@ -1,6 +1,6 @@
 import pytest
 
-from cloak_auth_bridge.config import ProfileConfig, Registry
+from cloak_browser_auth.config import ProfileConfig, Registry
 
 
 def test_registry_allows_only_declared_site_profile_edges() -> None:

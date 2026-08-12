@@ -1,11 +1,11 @@
 {
   "mcpServers": {
-    "cloak-auth-bridge": {
+    "cloak-browser-auth": {
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/inorilzy/cloak-auth-bridge.git@v0.2.0",
-        "cloak-auth-bridge-mcp"
+        "git+https://github.com/inorilzy/cloak-browser-auth.git@v0.3.0",
+        "cloak-browser-auth-mcp"
       ]
     }
   }

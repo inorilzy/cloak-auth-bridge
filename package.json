@@ -1,6 +1,6 @@
 {
-  "name": "cloak-auth-bridge-extension",
-  "version": "0.1.0",
+  "name": "cloak-browser-auth-extension",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {

@@ -2,8 +2,8 @@ import re
 
 import pytest
 
-from cloak_auth_bridge.cloak_profiles import CloakProfileManager
-from cloak_auth_bridge.config import ProfileConfig, Registry
+from cloak_browser_auth.cloak_profiles import CloakProfileManager
+from cloak_browser_auth.config import ProfileConfig, Registry
 
 
 def test_cookie_domain_matching_is_site_scoped() -> None:

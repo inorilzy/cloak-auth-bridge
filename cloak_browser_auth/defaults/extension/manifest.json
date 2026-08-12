@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Cloak Auth Bridge",
-  "description": "将本地 daemon 登记站点的 Chrome 登录态同步给 Cloak Auth Bridge。",
-  "version": "0.2.0",
+  "name": "Cloak Browser Auth",
+  "description": "将 Chrome 登录态同步到 Cloak 浏览器会话，供本地 Agent/MCP 使用。",
+  "version": "0.3.0",
   "minimum_chrome_version": "116",
   "permissions": [
     "cookies",
@@ -19,6 +19,6 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Cloak Auth Bridge"
+    "default_title": "Cloak Browser Auth"
   }
 }

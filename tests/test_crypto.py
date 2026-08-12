@@ -1,4 +1,4 @@
-from cloak_auth_bridge.crypto import create_proof, verify_proof
+from cloak_browser_auth.crypto import create_proof, verify_proof
 
 
 def test_client_and_server_proofs_are_domain_separated() -> None:

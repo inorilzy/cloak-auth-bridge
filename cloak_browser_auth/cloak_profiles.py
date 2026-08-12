@@ -7,9 +7,9 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import urlsplit
 
-from cloak_auth_bridge.config import ProfileConfig, Registry, SiteConfig
-from cloak_auth_bridge.converter import convert_cookie
-from cloak_auth_bridge.models import AuthBundle, ClearResult, ImportResult
+from cloak_browser_auth.config import ProfileConfig, Registry, SiteConfig
+from cloak_browser_auth.converter import convert_cookie
+from cloak_browser_auth.models import AuthBundle, ClearResult, ImportResult
 
 SET_LOCAL_STORAGE_SCRIPT = """
 (items) => {

@@ -134,7 +134,7 @@ debug-tab
 
 新增：
 
-- 代码：`cloak_auth_bridge/debug_session.py`
+- 代码：`cloak_browser_auth/debug_session.py`
 - CLI：`debug-open` / `debug-tab` / `debug-list` / `debug-status` / `debug-close`
 - 状态：`.auth/debug-session.json`（gitignore）
 - 默认端口：`127.0.0.1:9333`
@@ -177,7 +177,7 @@ debug-close                                -> 正常关闭
 ### 运行
 
 - daemon：`ws://127.0.0.1:17321`
-- MCP：`python -m cloak_auth_bridge mcp`（会占同一端口，需先停 `serve`）
+- MCP：`python -m cloak_browser_auth mcp`（会占同一端口，需先停 `serve`）
 
 ---
 
@@ -189,14 +189,14 @@ debug-close                                -> 正常关闭
 .\scripts\setup.ps1
 .\scripts\start.ps1
 .\scripts\pair.ps1
-.\.venv\Scripts\python.exe -m cloak_auth_bridge doctor
+.\.venv\Scripts\python.exe -m cloak_browser_auth doctor
 ```
 
 ### MCP
 
 ```powershell
 # 先停独立 serve，再：
-.\.venv\Scripts\python.exe -m cloak_auth_bridge mcp
+.\.venv\Scripts\python.exe -m cloak_browser_auth mcp
 ```
 
 工具：
@@ -210,11 +210,11 @@ debug-close                                -> 正常关闭
 
 ```powershell
 # 假设已把 bilibili/x sync 到 shared-main
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-open --profile shared-main --url https://www.bilibili.com
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-tab https://x.com/home
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-list
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-status
-.\.venv\Scripts\python.exe -m cloak_auth_bridge debug-close
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-open --profile shared-main --url https://www.bilibili.com
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-tab https://x.com/home
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-list
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-status
+.\.venv\Scripts\python.exe -m cloak_browser_auth debug-close
 ```
 
 ### CloakBrowser
@@ -227,8 +227,8 @@ debug-close                                -> 正常关闭
 ### 自检
 
 ```powershell
-.\.venv\Scripts\python.exe -m ruff check cloak_auth_bridge tests
-.\.venv\Scripts\python.exe -m mypy cloak_auth_bridge
+.\.venv\Scripts\python.exe -m ruff check cloak_browser_auth tests
+.\.venv\Scripts\python.exe -m mypy cloak_browser_auth
 .\.venv\Scripts\python.exe -m pytest -q
 npm test
 ```
@@ -256,12 +256,12 @@ npm test
 | `extension/service-worker.js` | 连接、握手、按 daemon 配置 capture |
 | `extension/protocol.js` | 校验 capture 请求中的 site 范围 |
 | `extension/manifest.json` | 宽 host permissions |
-| `cloak_auth_bridge/extension_bridge.py` | 下发 `cookie_domains`/`origins` |
-| `cloak_auth_bridge/service.py` | 同步编排 |
-| `cloak_auth_bridge/cloak_profiles.py` | 导入 / JSON 或 URL verify / 清理 |
-| `cloak_auth_bridge/config.py` | 注册表与 VerifyConfig |
-| `cloak_auth_bridge/debug_session.py` | CDP debug session |
-| `cloak_auth_bridge/main.py` | CLI（含 debug-*） |
+| `cloak_browser_auth/extension_bridge.py` | 下发 `cookie_domains`/`origins` |
+| `cloak_browser_auth/service.py` | 同步编排 |
+| `cloak_browser_auth/cloak_profiles.py` | 导入 / JSON 或 URL verify / 清理 |
+| `cloak_browser_auth/config.py` | 注册表与 VerifyConfig |
+| `cloak_browser_auth/debug_session.py` | CDP debug session |
+| `cloak_browser_auth/main.py` | CLI（含 debug-*） |
 | `sites/*.json` | 站点白名单 |
 | `profiles.json` | Profile 映射 |
 | `README.md` | 使用说明 |
@@ -301,7 +301,7 @@ npm test
 
 已按方案 B 收口：
 
-- **唯一推荐常驻**：`python -m cloak_auth_bridge mcp`
+- **唯一推荐常驻**：`python -m cloak_browser_auth mcp`
   - MCP stdio
   - 扩展桥 `ws://127.0.0.1:17321`
   - Cloak sync / verify / debug
@@ -315,7 +315,7 @@ npm test
 日常：
 
 ```text
-IDE 加载 cloak-auth-bridge MCP
+IDE 加载 cloak-browser-auth MCP
   -> 扩展显示已连接
   -> auth_sync_to_cloak
   -> cloak_debug_open / cloak_debug_tab
@@ -324,5 +324,5 @@ IDE 加载 cloak-auth-bridge MCP
 应急无 MCP 客户端时才用：
 
 ```powershell
-.\.venv\Scripts\python.exe -m cloak_auth_bridge serve
+.\.venv\Scripts\python.exe -m cloak_browser_auth serve
 ```

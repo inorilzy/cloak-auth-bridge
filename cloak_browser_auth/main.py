@@ -6,9 +6,9 @@ import logging
 import os
 import sys
 
-from cloak_auth_bridge.cloak_profiles import CloakProfileManager
-from cloak_auth_bridge.config import Registry
-from cloak_auth_bridge.debug_session import (
+from cloak_browser_auth.cloak_profiles import CloakProfileManager
+from cloak_browser_auth.config import Registry
+from cloak_browser_auth.debug_session import (
     close_session,
     list_tabs,
     new_tab,
@@ -17,18 +17,18 @@ from cloak_auth_bridge.debug_session import (
     run_holder,
     status,
 )
-from cloak_auth_bridge.extension_bridge import ExtensionBridge
-from cloak_auth_bridge.mcp_server import build_server, run_stdio
-from cloak_auth_bridge.secret_store import copy_token_to_clipboard, load_or_create_token
-from cloak_auth_bridge.service import AuthService
-from cloak_auth_bridge.websocket_server import ExtensionWebSocketServer
+from cloak_browser_auth.extension_bridge import ExtensionBridge
+from cloak_browser_auth.mcp_server import build_server, run_stdio
+from cloak_browser_auth.secret_store import copy_token_to_clipboard, load_or_create_token
+from cloak_browser_auth.service import AuthService
+from cloak_browser_auth.websocket_server import ExtensionWebSocketServer
 
 
 def build_runtime() -> tuple[ExtensionWebSocketServer, AuthService]:
     registry = Registry.load()
     # Default: loopback trust, no manual token paste.
-    # Set CLOAK_AUTH_REQUIRE_TOKEN=1 to force HMAC pairing token mode.
-    require_token = os.environ.get("CLOAK_AUTH_REQUIRE_TOKEN", "").strip().lower() in {
+    # Set CLOAK_BROWSER_AUTH_REQUIRE_TOKEN=1 to force HMAC pairing token mode.
+    require_token = os.environ.get("CLOAK_BROWSER_AUTH_REQUIRE_TOKEN", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -55,7 +55,7 @@ async def run_daemon() -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Cloak Auth Bridge local daemon")
+    parser = argparse.ArgumentParser(description="Cloak Browser Auth local daemon")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("mcp", help="Run MCP stdio + websocket bridge")
@@ -93,10 +93,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.command == "pair":
         copy_token_to_clipboard(load_or_create_token())
-        print("可选加固 Token 已复制到剪贴板。默认本机免 Token；仅在启用 CLOAK_AUTH_REQUIRE_TOKEN=1 时需要粘贴到扩展。")
+        print("可选加固 Token 已复制到剪贴板。默认本机免 Token；仅在启用 CLOAK_BROWSER_AUTH_REQUIRE_TOKEN=1 时需要粘贴到扩展。")
         return
     if args.command == "doctor":
-        from cloak_auth_bridge.config import PROJECT_ROOT, refresh_paths
+        from cloak_browser_auth.config import PROJECT_ROOT, refresh_paths
 
         refresh_paths()
         registry = Registry.load()

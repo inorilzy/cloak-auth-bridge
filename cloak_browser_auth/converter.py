@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from cloak_auth_bridge.config import SiteConfig
-from cloak_auth_bridge.models import AuthBundle, ChromeCookie
+from cloak_browser_auth.config import SiteConfig
+from cloak_browser_auth.models import AuthBundle, ChromeCookie
 
 SAME_SITE_MAP = {
     "no_restriction": "None",

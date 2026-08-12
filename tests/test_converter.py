@@ -2,9 +2,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from cloak_auth_bridge.config import Registry
-from cloak_auth_bridge.converter import convert_cookie, validate_bundle
-from cloak_auth_bridge.models import AuthBundle, ChromeCookie
+from cloak_browser_auth.config import Registry
+from cloak_browser_auth.converter import convert_cookie, validate_bundle
+from cloak_browser_auth.models import AuthBundle, ChromeCookie
 
 
 def test_cookie_conversion_preserves_auth_fields() -> None:

@@ -6,10 +6,10 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, TypeVar
 
-from cloak_auth_bridge.cloak_profiles import CloakProfileManager
-from cloak_auth_bridge.config import Registry
-from cloak_auth_bridge.converter import validate_bundle
-from cloak_auth_bridge.extension_bridge import ExtensionBridge
+from cloak_browser_auth.cloak_profiles import CloakProfileManager
+from cloak_browser_auth.config import Registry
+from cloak_browser_auth.converter import validate_bundle
+from cloak_browser_auth.extension_bridge import ExtensionBridge
 
 T = TypeVar("T")
 MIN_OPERATION_INTERVAL_SECONDS = 1.0
