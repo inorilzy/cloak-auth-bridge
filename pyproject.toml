@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cloak-browser-auth"
-version = "0.3.1"
+version = "0.3.2"
 description = "Local Cloak browser auth MCP with Chrome login sync and reverse tools"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,3 +62,4 @@ target-version = "py312"
 # CDP attach paths intentionally swallow non-fatal protocol errors.
 "cloak_browser_auth/reverse_session.py" = ["S110", "S112", "BLE001"]
 "cloak_browser_auth/mcp_server.py" = ["S110", "BLE001"]
+"cloak_browser_auth/debug_session.py" = ["S110", "BLE001"]

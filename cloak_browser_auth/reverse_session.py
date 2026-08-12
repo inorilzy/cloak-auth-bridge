@@ -292,11 +292,14 @@ class ReverseSession:
             }
 
     def _resolve_cdp_optional(self) -> str | None:
+        """Legacy only. New holders intentionally expose no CDP endpoint."""
         session = debug_session.load_session()
-        if session is not None and debug_session._port_open(session.port):
-            return session.cdp_http
-        if debug_session._port_open(debug_session.DEFAULT_DEBUG_PORT):
-            return f"http://127.0.0.1:{debug_session.DEFAULT_DEBUG_PORT}"
+        if session is not None:
+            cdp = (session.cdp_http or "").strip()
+            if cdp and debug_session._port_open(session.port):
+                # Old holders that still published a real CDP port.
+                return cdp
+            return None
         return None
 
     async def _attach_unlocked(self, endpoint: str) -> None:

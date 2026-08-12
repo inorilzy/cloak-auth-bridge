@@ -63,12 +63,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers.add_parser("pair", help="Copy pairing token to clipboard")
     subparsers.add_parser("doctor", help="Validate local config")
 
-    debug_open = subparsers.add_parser("debug-open", help="Start one headed debug browser session")
+    debug_open = subparsers.add_parser("debug-open", help="Start one headed debug browser session (Python holder + local control API)")
     debug_open.add_argument("--profile", default="shared-main")
-    debug_open.add_argument("--port", type=int, default=9333)
+    debug_open.add_argument("--port", type=int, default=19333)
     debug_open.add_argument("--url", action="append", default=[])
 
-    debug_tab = subparsers.add_parser("debug-tab", help="Open a tab in the active debug session via CDP")
+    debug_tab = subparsers.add_parser("debug-tab", help="Open a tab via the holder Python control API (no CDP)")
     debug_tab.add_argument("url")
 
     subparsers.add_parser("debug-list", help="List page tabs in the active debug session")
@@ -77,7 +77,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     debug_hold = subparsers.add_parser("debug-hold", help=argparse.SUPPRESS)
     debug_hold.add_argument("--profile", required=True)
-    debug_hold.add_argument("--port", type=int, default=9333)
+    debug_hold.add_argument("--port", type=int, default=19333)
     debug_hold.add_argument("--url", action="append", default=[])
 
     parser.set_defaults(command="mcp")
