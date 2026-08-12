@@ -116,7 +116,7 @@ IDE 启动 MCP（仅 cloak-browser-auth）
 
 ### Cloak 会话
 
-- `cloak_debug_open` — 打开 headed Cloak（默认 `shared-main`）并暴露 CDP `http://127.0.0.1:9333`；会尝试自动 `reverse_attach`
+- `cloak_debug_open` — 打开 headed Cloak（默认 `shared-main`）并在同一 MCP 进程内控制 `http://127.0.0.1:9333`；会尝试自动 `reverse_attach`
 - `cloak_debug_tab` / `cloak_debug_list` / `cloak_debug_status` / `cloak_debug_close`
 
 ### 内置逆向工具（Python 重写 js-reverse 工具面）

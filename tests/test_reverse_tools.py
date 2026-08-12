@@ -51,3 +51,12 @@ def SESSION_STATUS_DEFAULT_INACTIVE() -> bool:
 
     status = SESSION.status()
     return status["ok"] is True and status["active"] is False
+
+
+def test_status_reports_mode_field() -> None:
+    session = ReverseSession()
+    status = session.status()
+    assert status["ok"] is True
+    assert status["active"] is False
+    assert status["mode"] is None
+    assert "profile_id" in status

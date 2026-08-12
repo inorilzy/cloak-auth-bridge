@@ -69,12 +69,21 @@ class WsFrame:
 
 
 class ReverseSession:
-    """In-process CDP reverse-engineering session attached to Cloak debug CDP."""
+    """In-process reverse-engineering session owned by the MCP process.
+
+    Primary path: launch CloakBrowser via Python and keep the Playwright/Cloak
+    context in this process. Tools operate on that context directly.
+
+    Optional path: attach to an existing CDP endpoint (legacy/external).
+    """
 
     def __init__(self) -> None:
         self._playwright: Any | None = None
         self._browser: Any | None = None
         self._context: Any | None = None
+        self._owns_context: bool = False
+        self._profile_id: str | None = None
+        self._profile_path: str | None = None
         self._pages: list[Any] = []
         self._selected_page_idx = 0
         self._selected_frame_idx = 0
@@ -103,6 +112,9 @@ class ReverseSession:
         return {
             "ok": True,
             "active": self.active,
+            "mode": "owned" if self._owns_context else ("attached" if self.active else None),
+            "profile_id": self._profile_id,
+            "profile_path": self._profile_path,
             "cdp_http": self._attached_cdp or None,
             "pages": len(self._pages),
             "selected_page_idx": self._selected_page_idx if self._pages else None,
@@ -117,12 +129,156 @@ class ReverseSession:
             "ws_frames": len(self._ws_frames),
         }
 
-    async def ensure_attached(self, cdp_http: str | None = None) -> dict[str, Any]:
+    async def ensure_ready(self) -> None:
+        """Ensure a live context exists. Prefer owned Python-launched session."""
         async with self._lock:
-            endpoint = (cdp_http or "").strip() or self._resolve_cdp()
-            if self.active and self._attached_cdp == endpoint:
+            if self.active:
                 await self._refresh_pages()
-                return {"ok": True, "action": "attach", "cdp_http": endpoint, "reused": True}
+                return
+            endpoint = self._resolve_cdp_optional()
+            if endpoint:
+                await self._attach_unlocked(endpoint)
+                return
+        raise RuntimeError(
+            "No active browser session. Call cloak_debug_open(profile_id=..., url=[...]) first; "
+            "it launches Cloak in-process via the Python cloakbrowser API."
+        )
+
+    async def open_profile(
+        self,
+        profile_id: str = "shared-main",
+        urls: list[str] | None = None,
+        headless: bool | None = None,
+    ) -> dict[str, Any]:
+        """Launch CloakBrowser in this MCP process and keep the context for tools."""
+        async with self._lock:
+            if self.active:
+                if self._owns_context and self._profile_id == profile_id:
+                    opened: list[str] = []
+                    for url in urls or []:
+                        page = await self._context.new_page()  # type: ignore[union-attr]
+                        await page.goto(url, wait_until="domcontentloaded")
+                        opened.append(_safe_url(page.url))
+                    await self._refresh_pages()
+                    if self._pages:
+                        await self._ensure_page_domains(self._pages[self._selected_page_idx])
+                    return {
+                        "ok": True,
+                        "action": "open",
+                        "reused": True,
+                        "mode": "owned",
+                        "profile_id": self._profile_id,
+                        "profile_path": self._profile_path,
+                        "opened": opened,
+                        "pages": self._page_summaries(),
+                    }
+                await self._detach_unlocked()
+
+            from cloakbrowser import launch_persistent_context_async  # type: ignore[import-untyped]
+
+            from cloak_browser_auth.config import Registry
+
+            registry = Registry.load()
+            if profile_id not in registry.profiles:
+                raise ValueError(f"unknown profile: {profile_id}")
+            profile = registry.profiles[profile_id]
+            profile_path = registry.resolve_profile_path(profile)
+            profile_path.mkdir(parents=True, exist_ok=True)
+
+            # Close external holder if it locks the same profile/port.
+            try:
+                existing = debug_session.load_session()
+                if existing is not None:
+                    debug_session.close_session()
+            except Exception:
+                pass
+
+            context = await launch_persistent_context_async(
+                str(profile_path),
+                headless=profile.headless if headless is None else headless,
+            )
+            self._context = context
+            self._browser = getattr(context, "browser", None)
+            self._owns_context = True
+            self._profile_id = profile_id
+            self._profile_path = str(profile_path)
+            self._attached_cdp = ""
+            self._playwright = None
+
+            opened_urls: list[str] = []
+            for url in urls or []:
+                if not url.startswith(("https://", "http://", "about:")):
+                    raise ValueError(f"unsupported url: {url}")
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded")
+                opened_urls.append(_safe_url(page.url))
+            if not opened_urls and context.pages:
+                # keep default blank page if any
+                pass
+            await self._refresh_pages()
+            if self._pages:
+                self._selected_page_idx = 0
+                await self._ensure_page_domains(self._pages[0])
+            return {
+                "ok": True,
+                "action": "open",
+                "reused": False,
+                "mode": "owned",
+                "profile_id": profile_id,
+                "profile_path": str(profile_path),
+                "opened": opened_urls,
+                "pages": self._page_summaries(),
+                "control": "python-cloakbrowser-in-process",
+            }
+
+
+    async def new_tab(self, url: str) -> dict[str, Any]:
+        await self.ensure_ready()
+        assert self._context is not None
+        page = await self._context.new_page()
+        await page.goto(url, wait_until="domcontentloaded")
+        await self._refresh_pages()
+        self._selected_page_idx = max(0, len(self._pages) - 1)
+        await self._ensure_page_domains(self._pages[self._selected_page_idx])
+        return {
+            "ok": True,
+            "mode": "owned" if self._owns_context else "attached",
+            "url": _safe_url(page.url),
+            "page_idx": self._selected_page_idx,
+            "pages": self._page_summaries(),
+        }
+
+    async def list_pages(self) -> dict[str, Any]:
+        await self.ensure_ready()
+        return {
+            "ok": True,
+            "mode": "owned" if self._owns_context else "attached",
+            "pages": self._page_summaries(),
+            "selected_page_idx": self._selected_page_idx,
+        }
+
+    async def ensure_attached(self, cdp_http: str | None = None) -> dict[str, Any]:
+        """Optional/legacy: attach to an external CDP endpoint."""
+        async with self._lock:
+            if self.active and self._owns_context and not (cdp_http or "").strip():
+                await self._refresh_pages()
+                return {
+                    "ok": True,
+                    "action": "attach",
+                    "mode": "owned",
+                    "reused": True,
+                    "profile_id": self._profile_id,
+                    "pages": self._page_summaries(),
+                }
+            endpoint = (cdp_http or "").strip() or self._resolve_cdp_optional()
+            if not endpoint:
+                raise RuntimeError(
+                    "No browser session. Prefer cloak_debug_open (in-process Python launch). "
+                    "CDP attach is only a fallback."
+                )
+            if self.active and self._attached_cdp == endpoint and not self._owns_context:
+                await self._refresh_pages()
+                return {"ok": True, "action": "attach", "cdp_http": endpoint, "mode": "attached", "reused": True}
             if self.active:
                 await self._detach_unlocked()
             await self._attach_unlocked(endpoint)
@@ -130,19 +286,18 @@ class ReverseSession:
                 "ok": True,
                 "action": "attach",
                 "cdp_http": endpoint,
+                "mode": "attached",
                 "reused": False,
                 "pages": self._page_summaries(),
             }
 
-    def _resolve_cdp(self) -> str:
+    def _resolve_cdp_optional(self) -> str | None:
         session = debug_session.load_session()
         if session is not None and debug_session._port_open(session.port):
             return session.cdp_http
         if debug_session._port_open(debug_session.DEFAULT_DEBUG_PORT):
             return f"http://127.0.0.1:{debug_session.DEFAULT_DEBUG_PORT}"
-        raise RuntimeError(
-            "No active Cloak CDP session. Call cloak_debug_open / reverse_attach after starting a profile session."
-        )
+        return None
 
     async def _attach_unlocked(self, endpoint: str) -> None:
         from playwright.async_api import async_playwright
@@ -152,6 +307,9 @@ class ReverseSession:
         if not self._browser.contexts:
             raise RuntimeError(f"CDP endpoint has no browser contexts: {endpoint}")
         self._context = self._browser.contexts[0]
+        self._owns_context = False
+        self._profile_id = None
+        self._profile_path = None
         self._attached_cdp = endpoint
         await self._refresh_pages()
         if self._pages:
@@ -159,8 +317,13 @@ class ReverseSession:
 
     async def detach(self) -> dict[str, Any]:
         async with self._lock:
+            owned = self._owns_context
             await self._detach_unlocked()
-            return {"ok": True, "action": "detach"}
+            return {"ok": True, "action": "detach", "closed_owned_browser": owned}
+
+    async def close_session(self) -> dict[str, Any]:
+        """Close owned browser or detach external session."""
+        return await self.detach()
 
     async def _detach_unlocked(self) -> None:
         for cdp in list(self._cdp_by_page.values()):
@@ -170,13 +333,22 @@ class ReverseSession:
                 pass
         self._cdp_by_page.clear()
         self._pages = []
-        if self._browser is not None:
+        if self._context is not None and self._owns_context:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+        elif self._browser is not None and not self._owns_context:
+            # Attached mode: disconnect only.
             try:
                 await self._browser.close()
             except Exception:
                 pass
         self._browser = None
         self._context = None
+        self._owns_context = False
+        self._profile_id = None
+        self._profile_path = None
         if self._playwright is not None:
             try:
                 await self._playwright.stop()
@@ -442,7 +614,7 @@ class ReverseSession:
     # ---- tools ----
 
     async def select_page(self, page_idx: int | None = None, page_size: int = 20) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         await self._refresh_pages()
         if page_idx is not None:
             if page_idx < 0 or page_idx >= len(self._pages):
@@ -467,7 +639,7 @@ class ReverseSession:
     async def new_page(self, url: str) -> dict[str, Any]:
         if not url.startswith(("https://", "http://", "about:")):
             raise ValueError("url must be http(s) or about:")
-        await self.ensure_attached()
+        await self.ensure_ready()
         assert self._context is not None
         page = await self._context.new_page()
         await page.goto(url, wait_until="domcontentloaded")
@@ -489,7 +661,7 @@ class ReverseSession:
         url: str | None = None,
         ignore_cache: bool = False,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         page = self._require_page()
         action = type
         if action == "url":
@@ -519,7 +691,7 @@ class ReverseSession:
         }
 
     async def select_frame(self, frame_idx: int | None = None, page_size: int = 20) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         page = self._require_page()
         frames = page.frames
         rows = []
@@ -544,7 +716,7 @@ class ReverseSession:
         }
 
     async def click_element(self, selector: str, index: int = 0, timeout_ms: int = 5000) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         frame = self._require_frame()
         locator = frame.locator(selector)
         count = await locator.count()
@@ -557,7 +729,7 @@ class ReverseSession:
         return {"ok": True, "action": "click_element", "selector": selector, "index": index, "matched": count}
 
     async def take_screenshot(self, full_page: bool = False, file_path: str | None = None) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         page = self._require_page()
         raw = await page.screenshot(full_page=full_page, type="png")
         if file_path:
@@ -587,7 +759,7 @@ class ReverseSession:
         type: str | None = None,
         page_size: int = 20,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         if msgid is not None:
             for item in self._console:
                 if item.msgid == msgid:
@@ -607,7 +779,7 @@ class ReverseSession:
         page_size: int = 30,
         include_body: bool = False,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         entries = [self._network[rid] for rid in self._network_order if rid in self._network]
         if cookie_name:
             flow = []
@@ -667,7 +839,7 @@ class ReverseSession:
         return {"ok": True, "action": "clear_network_requests"}
 
     async def get_request_initiator(self, reqid: int) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         for entry in self._network.values():
             if entry.reqid == reqid:
                 return {
@@ -684,7 +856,7 @@ class ReverseSession:
         connection_id: int | None = None,
         page_size: int = 50,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         conns = [
             {
                 "connection_id": c["connection_id"],
@@ -715,7 +887,7 @@ class ReverseSession:
         }
 
     async def list_scripts(self, page_size: int = 50) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         # Force script discovery if empty.
         if not self._scripts:
             page = self._require_page()
@@ -743,7 +915,7 @@ class ReverseSession:
         end_line: int | None = None,
         max_chars: int = 20_000,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         sid = script_id
         if sid is None:
             if not url:
@@ -780,7 +952,7 @@ class ReverseSession:
         script_id: str | None = None,
         url: str | None = None,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         detail = await self.get_script_source(script_id=script_id, url=url, start_line=1, end_line=10**9, max_chars=10**9)
         # fetch full raw again
         sid = str(detail["script_id"])
@@ -805,7 +977,7 @@ class ReverseSession:
         is_regex: bool = False,
         max_matches: int = 50,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         if not self._scripts:
             await self.list_scripts()
         flags = 0 if case_sensitive else re.IGNORECASE
@@ -846,7 +1018,7 @@ class ReverseSession:
         url_filter: str | None = None,
         occurrence: int = 1,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         search = await self.search_in_sources(text, max_matches=100)
         candidates = search["matches"]
         if url_filter:
@@ -876,7 +1048,7 @@ class ReverseSession:
         return {"ok": True, "action": "set_breakpoint_on_text", "breakpoint": self._breakpoints[bpid]}
 
     async def break_on_xhr(self, url_pattern: str) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         self._xhr_breakpoints.add(url_pattern)
         cdp = await self._cdp()
         try:
@@ -898,7 +1070,7 @@ class ReverseSession:
         url_pattern: str | None = None,
         confirm: bool = False,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         cdp = await self._cdp()
         if action == "remove_code":
             if not breakpoint_id:
@@ -942,7 +1114,7 @@ class ReverseSession:
         }
 
     async def list_breakpoints(self) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         return {
             "ok": True,
             "action": "list_breakpoints",
@@ -951,7 +1123,7 @@ class ReverseSession:
         }
 
     async def get_paused_info(self, frame_index: int = 0) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         if not self._paused:
             return {"ok": True, "action": "get_paused_info", "paused": False}
         frames = self._paused.get("callFrames") or []
@@ -992,7 +1164,7 @@ class ReverseSession:
         }
 
     async def pause_or_resume(self, action: str) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         cdp = await self._cdp()
         if action == "pause":
             await cdp.send("Debugger.pause")
@@ -1009,7 +1181,7 @@ class ReverseSession:
         }
 
     async def step(self, type: str = "over") -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         cdp = await self._cdp()
         mapping = {
             "over": "Debugger.stepOver",
@@ -1030,7 +1202,7 @@ class ReverseSession:
         frame_index: int | None = None,
         await_promise: bool = True,
     ) -> dict[str, Any]:
-        await self.ensure_attached()
+        await self.ensure_ready()
         # If paused and frame requested, evaluate on call frame.
         if self._paused is not None and frame_index is not None:
             frames = self._paused.get("callFrames") or []
@@ -1069,7 +1241,7 @@ class ReverseSession:
     async def clear_site_data(self, confirm: bool = False, include_http_cache: bool = False) -> dict[str, Any]:
         if not confirm:
             raise ValueError("confirm=true is required")
-        await self.ensure_attached()
+        await self.ensure_ready()
         page = self._require_page()
         origin = _safe_url(page.url)
         parsed = urlsplit(page.url)

@@ -234,26 +234,19 @@ async def run_holder(profile_id: str, port: int, urls: list[str]) -> int:
 
 
 def _js_reverse_attach_hint(port: int) -> dict[str, object]:
-    """How to attach js-reverse-mcp to this live Cloak session.
+    """Legacy external-CDP attach hint.
 
-    js-reverse-mcp supports --browserUrl for an existing CDP endpoint and
-    conflicts with --cloak. That is intentional: cloak-browser-auth already
-    launched CloakBrowser; js-reverse only attaches for DevTools debugging.
+    Preferred path is cloak_debug_open in-process (Python cloakbrowser). This
+    helper remains only for external holder sessions started via debug-hold.
     """
     cdp = f"http://127.0.0.1:{port}"
     return {
         "cdp_http": cdp,
-        "codex_mcp_name": "js-reverse-cloak-auth",
-        "command": "npx",
-        "args": ["-y", "js-reverse-mcp@latest", "--browserUrl", cdp],
-        "workflow": [
-            "1. cloak_debug_open (this server) — starts Cloak on the auth profile + CDP",
-            "2. Use js-reverse-cloak-auth tools (navigate/network/breakpoint/...) against that CDP",
-            "3. cloak_debug_close when finished — releases the Free-plan browser seat",
-        ],
+        "preferred": "cloak_debug_open launches Cloak in the MCP process; reverse tools use that context directly",
+        "legacy_external_holder": True,
         "note": (
-            "Do not pass --cloak to js-reverse when attaching: --cloak launches a second "
-            "browser and conflicts with --browserUrl. Auth sync owns the Cloak process."
+            "Avoid CDP re-attach when the browser was opened by this MCP. "
+            "Use navigate_page / list_network_requests / evaluate_script on the owned session."
         ),
     }
 

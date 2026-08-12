@@ -80,7 +80,7 @@ def build_server(service: AuthService) -> Server:
             # ---- cloak session lifecycle ----
             _tool(
                 "cloak_debug_open",
-                "Open one headed CloakBrowser session on an allowlisted auth profile and expose local CDP (default :9333). Reverse tools attach to this session.",
+                "Open one headed CloakBrowser session on an allowlisted auth profile in this MCP process via Python cloakbrowser. Tools control the same in-memory context (no CDP re-attach).",
                 {
                     "type": "object",
                     "properties": {
@@ -107,7 +107,7 @@ def build_server(service: AuthService) -> Server:
             # ---- reverse session attach ----
             _tool(
                 "reverse_attach",
-                "Attach the in-process Python reverse tooling to the live Cloak CDP endpoint (from cloak_debug_open).",
+                "Optional/legacy: attach reverse tooling to an external CDP endpoint. Prefer cloak_debug_open, which already keeps an in-process Python browser context.",
                 {
                     "type": "object",
                     "properties": {"cdp_http": {"type": "string"}},
@@ -432,33 +432,37 @@ async def _dispatch(service: AuthService, name: str, args: dict[str, Any]) -> di
 
     # cloak lifecycle
     if name == "cloak_debug_open":
-        opened = await asyncio.to_thread(
-            debug_session.open_session,
+        # Preferred path: launch Cloak in this MCP process via Python cloakbrowser.
+        # Tools then control the same in-memory context — no CDP re-attach required.
+        return await SESSION.open_profile(
             args.get("profile_id", "shared-main"),
             args.get("url") or [],
-            int(args.get("port", 9333)),
         )
-        # auto-attach reverse tooling
-        try:
-            attach = await SESSION.ensure_attached(str(opened.get("session", {}).get("cdp_http") or ""))
-            opened["reverse_attach"] = attach
-        except Exception as exc:
-            opened["reverse_attach"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return opened
     if name == "cloak_debug_tab":
+        if SESSION.active:
+            return await SESSION.new_tab(args["url"])
         return await debug_session.new_tab(args["url"])
     if name == "cloak_debug_list":
+        if SESSION.active:
+            return await SESSION.list_pages()
         return await asyncio.to_thread(debug_session.list_tabs)
     if name == "cloak_debug_status":
-        status = await asyncio.to_thread(debug_session.status)
-        status["reverse"] = SESSION.status()
+        status = SESSION.status()
+        # include external holder info only as secondary signal
+        try:
+            status["external_holder"] = await asyncio.to_thread(debug_session.status)
+        except Exception:
+            status["external_holder"] = None
         return status
     if name == "cloak_debug_close":
+        closed = await SESSION.close_session()
+        # also stop any legacy external holder if still running
         try:
-            await SESSION.detach()
-        except Exception:
-            pass
-        return await asyncio.to_thread(debug_session.close_session)
+            holder = await asyncio.to_thread(debug_session.close_session)
+        except Exception as exc:
+            holder = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        closed["external_holder"] = holder
+        return closed
 
     # reverse attach
     if name == "reverse_attach":
