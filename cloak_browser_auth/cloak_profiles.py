@@ -159,17 +159,11 @@ class CloakProfileManager:
         return cookies_cleared
 
     async def _launch(self, profile: ProfileConfig) -> Any:
-        try:
-            from cloakbrowser import launch_persistent_context_async  # type: ignore[import-untyped]
-        except ImportError as error:
-            raise RuntimeError("cloakbrowser is not installed") from error
+        from cloak_browser_auth.cloak_processes import launch_persistent_with_reap
 
         profile_path = self.registry.resolve_profile_path(profile)
         profile_path.mkdir(parents=True, exist_ok=True)
-        return await launch_persistent_context_async(
-            str(profile_path),
-            headless=profile.headless,
-        )
+        return await launch_persistent_with_reap(profile_path, headless=profile.headless)
 
     async def _clear_origins(self, context: Any, origins: list[str]) -> None:
         for origin in origins:

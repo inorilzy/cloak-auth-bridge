@@ -131,6 +131,7 @@ IDE 启动 cloak-browser-auth MCP（空闲则自带 :17321）
 
 - `cloak_debug_open` — 在本 MCP 进程启动或复用 headed CloakBrowser（默认 `shared-main`）
 - `cloak_debug_tab` / `cloak_debug_list` / `cloak_debug_status` / `cloak_debug_close(profile_id, confirm=true)`
+- `cloak_reap_stale` — 列出或杀掉占着 Free 席位的残留 Cloak 进程（不动 Google Chrome；杀掉要 `confirm=true`）
 
 ### 内置逆向工具（Python 重写 js-reverse 工具面）
 

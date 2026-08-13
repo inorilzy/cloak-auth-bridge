@@ -115,10 +115,19 @@ def build_server(service: AuthBridgeClient, session: ReverseSession | None = Non
                     "additionalProperties": False,
                 },
             ),
+            _tool(
+                "cloak_reap_stale",
+                "List or kill leftover CloakBrowser processes occupying the license seat. Never touches Google Chrome. Killing requires confirm=true.",
+                {
+                    "type": "object",
+                    "properties": {"confirm": {"type": "boolean"}},
+                    "additionalProperties": False,
+                },
+            ),
             # ---- reverse session attach ----
             _tool(
                 "reverse_attach",
-                "Optional/legacy: attach reverse tooling to an external CDP endpoint. Prefer cloak_debug_open, which connects to the independent browser holder.",
+                "Optional/legacy: attach reverse tooling to an external CDP endpoint. Prefer cloak_debug_open.",
                 {
                     "type": "object",
                     "properties": {"cdp_http": {"type": "string"}},
@@ -460,6 +469,21 @@ async def _dispatch(
         if args.get("confirm") is not True:
             raise ValueError("cloak_debug_close requires confirm=true")
         return await session.close_session(args["profile_id"])
+    if name == "cloak_reap_stale":
+        from cloak_browser_auth.cloak_processes import list_cloak_processes, reap_stale_cloak_processes
+
+        if args.get("confirm") is True:
+            return reap_stale_cloak_processes()
+        processes = list_cloak_processes()
+        return {
+            "ok": True,
+            "action": "list",
+            "found": len(processes),
+            "processes": [
+                {"pid": item.pid, "name": item.name, "reason": item.reason}
+                for item in processes
+            ],
+        }
 
     # reverse attach
     if name == "reverse_attach":

@@ -108,5 +108,15 @@ class AuthService:
     async def _safe_profile_call(self, operation: Awaitable[T], action: str) -> T:
         try:
             return await operation
-        except Exception:  # noqa: BLE001 - credential boundary must sanitize third-party errors
-            raise RuntimeError(f"Cloak {action} failed; inspect local daemon diagnostics") from None
+        except Exception as error:  # noqa: BLE001 - credential boundary must sanitize third-party errors
+            try:
+                from cloak_browser_auth import config
+
+                config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
+                (config.AUTH_DIR / "last-auth-error.log").write_text(
+                    f"cloak_{action}: {type(error).__name__}: {error}\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            raise RuntimeError(f"Cloak {action} failed ({type(error).__name__}: {error})") from None

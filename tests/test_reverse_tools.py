@@ -66,6 +66,8 @@ def test_status_reports_mode_field() -> None:
 class FakePage:
     def __init__(self, url: str = "about:blank") -> None:
         self.url = url
+        self.closed = False
+        self.context: FakeContext | None = None
 
     async def goto(self, url: str, wait_until: str = "domcontentloaded") -> None:
         del wait_until
@@ -73,6 +75,11 @@ class FakePage:
 
     async def title(self) -> str:
         return ""
+
+    async def close(self) -> None:
+        self.closed = True
+        if self.context is not None and self in self.context.pages:
+            self.context.pages.remove(self)
 
 
 class FakeContext:
@@ -83,11 +90,36 @@ class FakeContext:
 
     async def new_page(self) -> FakePage:
         page = FakePage()
+        page.context = self
         self.pages.append(page)
         return page
 
     async def close(self) -> None:
         self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_open_closes_leftover_about_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = ReverseSession()
+    context = FakeContext()
+    blank = FakePage("about:blank")
+    blank.context = context
+    context.pages.append(blank)
+    session._context = context
+    session._browser = context.browser
+    session._profile_id = "xiaohongshu-main"
+    session._profile_path = "profiles/xiaohongshu-main"
+    session._owned = True
+
+    async def fake_domains(page: object) -> None:
+        del page
+
+    monkeypatch.setattr(session, "_ensure_page_domains", fake_domains)
+    opened = await session._open_urls_unlocked(["https://www.xiaohongshu.com/"])
+
+    assert opened == ["https://www.xiaohongshu.com/"]
+    assert blank.closed is True
+    assert all(page.url != "about:blank" for page in context.pages)
 
 
 class FakePlaywright:

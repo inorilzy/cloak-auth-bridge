@@ -82,9 +82,23 @@ class ExtensionWebSocketServer:
             else:
                 raise ValueError("unknown auth operation")
             response = {"ok": True, "result": result}
-        except (KeyError, TypeError, ValueError, RuntimeError) as error:
+        except (KeyError, TypeError, ValueError, RuntimeError, TimeoutError) as error:
             LOGGER.warning("Auth Bridge request failed: error_type=%s", type(error).__name__)
-            response = {"ok": False, "error": "Auth Bridge operation failed; inspect daemon diagnostics"}
+            try:
+                from cloak_browser_auth import config
+
+                config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
+                (config.AUTH_DIR / "last-auth-error.log").write_text(
+                    f"{type(error).__name__}: {error}\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            message = str(error)
+            if message.startswith(("Cloak ", "Chrome extension")):
+                response = {"ok": False, "error": message}
+            else:
+                response = {"ok": False, "error": "Auth Bridge operation failed; inspect daemon diagnostics"}
         await connection.send(json.dumps(response, ensure_ascii=False))
 
     def serve(self) -> Any:

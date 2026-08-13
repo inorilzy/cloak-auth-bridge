@@ -19,6 +19,10 @@ def _safe_url(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path or '/'}"
 
 
+def _is_blank_url(url: str) -> bool:
+    return url in {"", "about:blank", "about:blank#blocked"}
+
+
 @dataclass
 class NetworkEntry:
     reqid: int
@@ -213,12 +217,10 @@ class ReverseSession:
         self._playwright = None
 
     async def _launch_context(self, profile: Any, profile_path: Any, headless: bool | None) -> Any:
-        try:
-            from cloakbrowser import launch_persistent_context_async  # type: ignore[import-untyped]
-        except ImportError as error:
-            raise RuntimeError("cloakbrowser is not installed") from error
-        return await launch_persistent_context_async(
-            str(profile_path),
+        from cloak_browser_auth.cloak_processes import launch_persistent_with_reap
+
+        return await launch_persistent_with_reap(
+            profile_path,
             headless=profile.headless if headless is None else headless,
         )
 
@@ -238,11 +240,26 @@ class ReverseSession:
             page = await self._context.new_page()
             await page.goto(url, wait_until="domcontentloaded")
             opened.append(_safe_url(page.url))
+        await self._close_unused_blank_pages()
         await self._refresh_pages()
         if self._pages:
             self._selected_page_idx = max(0, len(self._pages) - 1)
             await self._ensure_page_domains(self._pages[self._selected_page_idx])
         return opened
+
+    async def _close_unused_blank_pages(self) -> None:
+        assert self._context is not None
+        pages = list(self._context.pages)
+        live = [page for page in pages if not _is_blank_url(getattr(page, "url", ""))]
+        if not live:
+            return
+        for page in pages:
+            if _is_blank_url(getattr(page, "url", "")):
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
 
     async def new_tab(self, url: str) -> dict[str, Any]:
         if not url.startswith("https://"):
