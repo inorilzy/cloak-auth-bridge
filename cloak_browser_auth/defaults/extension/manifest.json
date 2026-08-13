@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Cloak Browser Auth",
   "description": "将 Chrome 登录态同步到 Cloak 浏览器会话，供本地 Agent/MCP 使用。",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minimum_chrome_version": "116",
   "permissions": [
     "cookies",

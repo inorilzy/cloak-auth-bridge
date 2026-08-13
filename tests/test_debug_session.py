@@ -149,3 +149,50 @@ def test_status_does_not_delete_an_unverified_registry(monkeypatch) -> None:
 
     assert debug_session.status()["stale_registry"] is True
     assert cleared == []
+
+
+def test_published_holder_pid_may_differ_from_venv_launcher_pid(monkeypatch) -> None:
+    session = DebugSession(
+        profile_id="bilibili-main",
+        profile_path="profile",
+        port=19333,
+        pid=222,
+        control_http="http://127.0.0.1:19333",
+        started_at="2026-08-13T00:00:00+00:00",
+        instance_id="expected",
+        endpoint="pipe://cloak/bilibili-main",
+    )
+    monkeypatch.setattr(debug_session, "_read_session", lambda: session)
+
+    published = debug_session._wait_for_published_session(
+        "bilibili-main", "expected", 19333, timeout=0.1
+    )
+
+    assert published.pid == 222
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "instance_id", "port"),
+    [
+        ("other", "expected", 19333),
+        ("bilibili-main", "other", 19333),
+        ("bilibili-main", "expected", 19334),
+    ],
+)
+def test_published_holder_must_match_requested_identity(
+    monkeypatch, profile_id: str, instance_id: str, port: int
+) -> None:
+    session = DebugSession(
+        profile_id="bilibili-main",
+        profile_path="profile",
+        port=19333,
+        pid=222,
+        control_http="http://127.0.0.1:19333",
+        started_at="2026-08-13T00:00:00+00:00",
+        instance_id="expected",
+        endpoint="ws://127.0.0.1:23456/secret",
+    )
+    monkeypatch.setattr(debug_session, "_read_session", lambda: session)
+
+    with pytest.raises(RuntimeError, match="publishing a verified session"):
+        debug_session._wait_for_published_session(profile_id, instance_id, port, timeout=0)

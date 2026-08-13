@@ -7,7 +7,7 @@
 
 当前项目应收敛成一个模型：**每个 Cloak Profile 只由一个长期、独立的 Browser Holder 拥有；MCP stdio 进程只连接，不拥有浏览器。**
 
-首选数据面不是公开 CDP，也不是继续扩展自制 HTTP RPC，而是 Playwright 1.59+ 的原生 `browser.bind()` / `browser_type.connect()`：Holder 启动 persistent context 后，将其所属 Browser 绑定到 Windows named pipe；MCP 每次启动后连接该 endpoint。Playwright 官方说明 `browser.bind()` 默认使用 named pipe、支持多个客户端，并明确推荐给 Playwright MCP 等客户端使用。[Playwright Python `Browser.bind`](https://playwright.dev/python/docs/api/class-browser#browser-bind)；[Playwright Python 1.59 release notes](https://playwright.dev/python/docs/release-notes#version-159)
+首选数据面不是公开 CDP，也不是继续扩展自制 HTTP RPC，而是 Playwright 1.59+ 的原生 `browser.bind()` / `browser_type.connect()`：Holder 启动 persistent context 后，将 Browser 绑定到仅 loopback 可访问的随机 WebSocket endpoint；MCP 每次启动后连接该 endpoint。Playwright 官方说明 `browser.bind()` 支持 named pipe 或 WebSocket，并支持多个客户端。[Playwright Python `Browser.bind`](https://playwright.dev/python/docs/api/class-browser#browser-bind)；[Playwright Python 1.59 release notes](https://playwright.dev/python/docs/release-notes#version-159)
 
 管理面只保留少量、有认证的命令：`ensure/open`、`status`、`close(confirm=true)`。`detach` 只释放当前 MCP 的 Playwright client/CDP sessions，绝不能关闭 persistent context 或 Holder。用户手动关闭浏览器窗口时，Holder自然退出。
 
@@ -72,7 +72,7 @@ Chrome 登录态扩展
 Per-user Browser Holder（每个 profile 一个，唯一 owner）
   ├─ launch_persistent_context_async(profile_dir)
   ├─ 持有 Playwright + persistent BrowserContext
-  ├─ browser.bind(profile/session title) → Windows named pipe
+  ├─ browser.bind(profile/session title, host=127.0.0.1, port=0) → loopback WebSocket
   ├─ profile lock + session registry + health
   └─ 管理 IPC：ensure/status/close(confirm)
           ↑

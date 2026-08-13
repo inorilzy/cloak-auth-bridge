@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cloak-browser-auth"
-version = "0.4.0"
+version = "0.4.1"
 description = "Local Cloak browser auth MCP with Chrome login sync and reverse tools"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "cloakbrowser>=0.5.6,<0.6",
   "mcp>=1.0,<2",
-  "playwright>=1.59,<2",
+  "playwright>=1.62,<1.63",
   "pydantic>=2.10,<3",
   "pywin32>=308; sys_platform == 'win32'",
   "websockets>=14,<17"

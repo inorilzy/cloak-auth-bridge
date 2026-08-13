@@ -220,6 +220,25 @@ def _wait_for_control(session: DebugSession, timeout: float = 60.0) -> None:
     raise RuntimeError(f"control port {session.port} did not become ready: {last_error}")
 
 
+def _wait_for_published_session(
+    profile_id: str, instance_id: str, port: int, timeout: float = 10.0
+) -> DebugSession:
+    deadline = time.time() + timeout
+    while True:
+        session = _read_session()
+        if (
+            session is not None
+            and session.profile_id == profile_id
+            and session.instance_id == instance_id
+            and session.port == port
+        ):
+            return session
+        if time.time() >= deadline:
+            break
+        time.sleep(0.1)
+    raise RuntimeError("holder started without publishing a verified session")
+
+
 async def _open_urls(context: Any, urls: list[str]) -> list[str]:
     opened: list[str] = []
     for url in urls:
@@ -426,7 +445,10 @@ async def run_holder(profile_id: str, port: int, urls: list[str], instance_id: s
                 raise RuntimeError("CloakBrowser persistent context has no browser")
             endpoint = str(
                 (await browser.bind(
-                    f"cloak-browser-auth-{instance_id}", workspace_dir=str(config.PROJECT_ROOT)
+                    f"cloak-browser-auth-{instance_id}",
+                    workspace_dir=str(config.PROJECT_ROOT),
+                    host="127.0.0.1",
+                    port=0,
                 ))["endpoint"]
             )
             opened = await _open_urls(context, urls)
@@ -565,35 +587,14 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
     finally:
         log_handle.close()
 
-    expected = DebugSession(
-        profile_id=profile_id,
-        profile_path=str(Registry.load().resolve_profile_path(Registry.load().profiles[profile_id])),
-        port=port,
-        pid=proc.pid,
-        control_http=f"http://127.0.0.1:{port}",
-        started_at="",
-        instance_id=instance_id,
-        endpoint="",
-        browser="cloakbrowser",
-    )
     try:
-        _wait_for_control(expected, timeout=90.0)
+        session = _wait_for_published_session(profile_id, instance_id, port, timeout=90.0)
+        _wait_for_control(session, timeout=10.0)
     except Exception:
-        if _pid_running(proc.pid):
+        if proc.poll() is None:
             _terminate_pid(proc.pid)
         _clear_session_files(instance_id)
         raise
-
-    deadline = time.time() + 10
-    session = load_session()
-    while session is None and time.time() < deadline:
-        time.sleep(0.1)
-        session = load_session()
-    if session is None:
-        if _pid_running(proc.pid):
-            _terminate_pid(proc.pid)
-        _clear_session_files(instance_id)
-        raise RuntimeError("holder started without publishing a verified session")
 
     return {
         "ok": True,
@@ -601,7 +602,7 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
         "mode": "owned-holder",
         "control": "python-cloakbrowser-holder",
         "session": session.to_public_dict(),
-        "holder_pid": proc.pid,
+        "holder_pid": session.pid,
         "hint": _control_hint(session.port),
     }
 
