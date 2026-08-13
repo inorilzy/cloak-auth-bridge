@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 from collections import defaultdict
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from cloak_browser_auth.config import ProfileConfig, Registry, SiteConfig
@@ -21,10 +21,22 @@ SET_LOCAL_STORAGE_SCRIPT = """
 """
 
 
+class HolderProfileGateway(Protocol):
+    """Optional route into the live Holder so profile writes do not launch a second browser."""
+
+    async def __call__(self, profile_id: str, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+
 class CloakProfileManager:
-    def __init__(self, registry: Registry) -> None:
+    def __init__(self, registry: Registry, holder: HolderProfileGateway | None = None) -> None:
         self.registry = registry
+        self._holder = holder
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+    async def _try_holder(self, profile_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if self._holder is None:
+            return None
+        return await self._holder(profile_id, payload)
 
     async def import_auth(
         self,
@@ -40,9 +52,7 @@ class CloakProfileManager:
             raise ValueError("replace mode requires a dedicated profile")
 
         async with self._locks[profile_id]:
-            from cloak_browser_auth.debug_session import profile_operation
-
-            holder_result = await profile_operation(
+            holder_result = await self._try_holder(
                 profile_id,
                 {
                     "op": "auth_import",
@@ -71,9 +81,7 @@ class CloakProfileManager:
 
     async def verify(self, site: SiteConfig, profile_id: str, profile: ProfileConfig) -> bool:
         async with self._locks[profile_id]:
-            from cloak_browser_auth.debug_session import profile_operation
-
-            holder_result = await profile_operation(
+            holder_result = await self._try_holder(
                 profile_id,
                 {"op": "auth_verify", "site_id": site.id},
             )
@@ -94,9 +102,7 @@ class CloakProfileManager:
         profile: ProfileConfig,
     ) -> ClearResult:
         async with self._locks[profile_id]:
-            from cloak_browser_auth.debug_session import profile_operation
-
-            holder_result = await profile_operation(
+            holder_result = await self._try_holder(
                 profile_id,
                 {"op": "auth_clear", "site_id": site.id},
             )

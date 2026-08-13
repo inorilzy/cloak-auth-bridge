@@ -2,14 +2,11 @@
 
 一个本地认证与调试桥：Chrome MV3 扩展在配对后，按本地登记的站点配置采集 Cookies 和 `localStorage`，通过独立的本机认证服务注入 CloakBrowser 持久 Profile。
 
-推荐按职责运行三个组件：
+日常只装 MCP。IDE 启动时若 `127.0.0.1:17321` 空闲，MCP 自己带上扩展认证桥；已被占用则复用已有实例。
 
-1. `python -m cloak_browser_auth serve`：唯一常驻的扩展认证服务，监听 `ws://127.0.0.1:17321`
-2. `python -m cloak_browser_auth mcp`：可随 IDE 启停的 stdio 客户端
-3. Cloak Holder：按需启动并独占浏览器 Profile；MCP 断开不会关闭浏览器
+Cloak 窗口仍由独立 Holder 进程持有，所以关掉 IDE / 重载 MCP 不会关浏览器。只有 `cloak_debug_close(profile_id=..., confirm=true)` 或手动关窗才会结束 Holder。
 
-只有显式调用 `cloak_debug_close(profile_id=..., confirm=true)` 或手动关闭浏览器窗口才结束 Holder。
-因此 `cloak_debug_open` 要求独立的 `serve` 已运行；Holder 由该常驻进程发起，不挂在 MCP 的进程树下。
+`serve` 是可选项：只在希望 IDE 关掉后扩展仍保持连接时才单独常驻。
 
 扩展安装时默认具备 `https://*/*` 读取权限，不再要求逐站点“授权并加入白名单”。真正的站点范围由 `sites/` 与 `profiles.json` 双重约束。MCP 工具只返回数量和验证结果，原始 Cookie/Token 不进入 LLM 上下文。
 
@@ -40,11 +37,7 @@ tool_timeout_sec = 180
 enabled = true
 ```
 
-MCP 启动前，另开终端常驻认证服务：
-
-```powershell
-uvx --from git+https://github.com/inorilzy/cloak-browser-auth.git cloak-browser-auth serve
-```
+换电脑：加上这条 MCP 即可。第一次启动会播种 `~/.cloak-browser-auth/`，并在 `:17321` 空闲时自己打开认证桥。不必再另开终端跑 `serve`。
 
 `uvx` 会从 GitHub 拉取包。首次运行会在用户目录播种配置：
 
@@ -71,13 +64,7 @@ cd cloak-browser-auth
 .\scripts\setup.ps1
 ```
 
-先在独立终端启动认证服务：
-
-```powershell
-.\.venv\Scripts\python.exe -m cloak_browser_auth serve
-```
-
-本地 Codex 可直接使用仓库内 `.mcp.json`：
+本地 Codex 可直接使用仓库内 `.mcp.json`。Cursor 用 `.cursor/mcp.json`。两者都只写 `mcp` 这一条命令。
 
 ```json
 {
@@ -90,19 +77,11 @@ cd cloak-browser-auth
 }
 ```
 
-Cursor 可用 `.cursor/mcp.json`。两者都只启动 MCP 客户端，不占用 `17321`；四个 `auth_*` 工具通过 `ws://127.0.0.1:17321/auth` 调用认证服务。
+第一个 MCP 进程占用 `17321` 并接待 Chrome 扩展；第二个 IDE 再开 MCP 时自动连上已有桥。默认复用本机 DPAPI secret；需要覆盖时两端设相同的 `CLOAK_BROWSER_AUTH_CLIENT_TOKEN`。
 
-MCP 与认证服务默认复用本机 DPAPI secret；需要覆盖时，两端设置相同的 `CLOAK_BROWSER_AUTH_CLIENT_TOKEN`。
+## 推荐运行方式
 
-## 推荐运行方式：daemon + MCP
-
-长期运行：
-
-```powershell
-.\.venv\Scripts\python.exe -m cloak_browser_auth serve
-```
-
-IDE 按需启动：
+换机 / 日常：只启动 MCP。
 
 ```powershell
 .\.venv\Scripts\python.exe -m cloak_browser_auth mcp
@@ -110,16 +89,18 @@ IDE 按需启动：
 
 成功后：
 
-- 扩展可连 `ws://127.0.0.1:17321`
+- 扩展连 `ws://127.0.0.1:17321`（由这个 MCP 或已有实例提供）
 - Agent 可直接调下方工具
-- MCP 重启不会断开扩展，也不会关闭已打开的 CloakBrowser
-- 不要重复启动 `serve`；`17321` 只允许一个认证服务占用
+- 重载 MCP 不会关闭已打开的 Cloak 窗口
+- `:17321` 只允许一个认证桥；后启动的 MCP 自动复用
+
+可选：希望 IDE 全关后扩展仍在线，再单独跑 `serve`。
 
 ### 连接扩展（默认免 Token）
 
 默认 **本机 loopback trust**：扩展只要连 `ws://127.0.0.1:17321`，无需粘贴 Token。
 
-1. 启动独立的 `serve`（监听 17321）
+1. 在 IDE 里启用 cloak-browser-auth MCP（它会打开 17321）
 2. Chrome 加载 `extension/` 并打开弹窗
 3. Token 留空，点「保存并重连」
 4. 顶部显示「已连接」即可
@@ -129,12 +110,11 @@ IDE 按需启动：
 ### 日常流程
 
 ```text
-独立 serve 常驻，扩展自动连上本机 WS（免 Token）
-  -> IDE 启动 cloak-browser-auth MCP
+IDE 启动 cloak-browser-auth MCP（空闲则自带 :17321）
+  -> Chrome 扩展连 ws://127.0.0.1:17321
   -> auth_sync_to_cloak
-  -> cloak_debug_open（启动或复用独立 Cloak Holder）
-  -> 调试：navigate_page / list_network_requests /
-     search_in_sources / set_breakpoint_on_text / evaluate_script ...
+  -> cloak_debug_open（拉起独立 Cloak Holder）
+  -> 调试：navigate_page / list_network_requests / ...
   -> MCP 可退出；浏览器继续保留
   -> 仅在确实结束时 cloak_debug_close(profile_id, confirm=true)
 ```
@@ -236,22 +216,15 @@ profiles.json
 Chrome 扩展
     │ WebSocket 127.0.0.1:17321
     ▼
-cloak_browser_auth serve        ← 独立认证服务，唯一占用 17321
+MCP stdio（:17321 空闲则嵌入认证桥，否则复用）
     ├─ /auth holder_open ── spawn ── Cloak Holder  ← 唯一浏览器 owner
     │                                  └─ cloakbrowser → profiles/
-    ▲
-    │ ws://127.0.0.1:17321/auth
-IDE ── stdio ── cloak_browser_auth mcp   ← 可重启客户端
-                         └─ Playwright connect → Cloak Holder
+    └─ Playwright connect ───────────────────────────┘
+
+可选：单独 `serve` 常驻同一端口，给无 IDE 场景用
 ```
 
-认证服务应独立运行：
-
-```powershell
-.\.venv\Scripts\python.exe -m cloak_browser_auth serve
-```
-
-MCP、Holder 与认证服务互不拥有对方的生命周期。断开 MCP 只断开客户端；关闭浏览器必须显式执行 `cloak_debug_close(profile_id=..., confirm=true)` 或手动关窗。
+关掉 MCP 不会关 Holder。关浏览器必须 `cloak_debug_close(profile_id=..., confirm=true)` 或手动关窗。
 
 ## 调试 CLI（可选）
 
@@ -269,9 +242,9 @@ MCP、Holder 与认证服务互不拥有对方的生命周期。断开 MCP 只�
 ## 安装 Chrome 扩展
 
 1. Chrome 打开 `chrome://extensions`，启用“开发者模式”。
-2. “加载已解压的扩展程序”，选择本仓库 `extension` 目录。
-3. 确保独立的 `cloak-browser-auth serve` 正在运行。
-4. `.\scripts\pair.ps1`，在扩展里粘贴 Token 并保存，确认“已连接”。
+2. “加载已解压的扩展程序”，选择本仓库 `extension` 目录，或用户目录里播种的 `~/.cloak-browser-auth/extension`。
+3. 在 IDE 里启用 MCP（它会打开 `17321`），扩展弹窗 Token 留空，点「保存并重连」。
+4. 只有启用了 `CLOAK_BROWSER_AUTH_REQUIRE_TOKEN=1` 时，才需要 `.\scripts\pair.ps1` 粘贴 Token。
 
 扩展默认申请 `https://*/*`，只支持 HTTPS，只允许连接 `ws://127.0.0.1`。
 

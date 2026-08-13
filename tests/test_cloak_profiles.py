@@ -2,7 +2,6 @@ import re
 
 import pytest
 
-from cloak_browser_auth import debug_session
 from cloak_browser_auth.cloak_profiles import CloakProfileManager
 from cloak_browser_auth.config import ProfileConfig, Registry
 
@@ -64,11 +63,10 @@ async def test_clear_is_site_scoped_for_shared_profiles() -> None:
 
 
 @pytest.mark.asyncio
-async def test_clear_routes_to_active_holder_without_launching_second_context(monkeypatch) -> None:
+async def test_clear_routes_to_active_holder_without_launching_second_context() -> None:
     registry = Registry.load()
     site = registry.sites["bilibili-main"]
     profile = registry.profiles["shared-main"]
-    manager = CloakProfileManager(registry)
     calls: list[tuple[str, dict]] = []
 
     async def holder_call(profile_id: str, payload: dict):
@@ -81,11 +79,12 @@ async def test_clear_routes_to_active_holder_without_launching_second_context(mo
             "origins_cleared": 1,
         }
 
+    manager = CloakProfileManager(registry, holder=holder_call)
+
     async def should_not_launch(_profile):
         raise AssertionError("active holder must own the profile context")
 
-    monkeypatch.setattr(debug_session, "profile_operation", holder_call)
-    monkeypatch.setattr(manager, "_launch", should_not_launch)
+    manager._launch = should_not_launch  # type: ignore[method-assign]
 
     result = await manager.clear(site, "shared-main", profile)
 

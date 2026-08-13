@@ -125,3 +125,79 @@ def test_mcp_builds_client_while_serve_builds_websocket_owner(monkeypatch: pytes
     assert websocket_server.service is service
     assert websocket_server.client_token == "local-client-token"
     assert isinstance(mcp_service, AuthBridgeClient)
+
+
+@pytest.mark.asyncio
+async def test_mcp_embeds_auth_bridge_when_port_is_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cloak_browser_auth import main
+
+    listening = {"up": False}
+    entered: list[str] = []
+
+    class FakeServe:
+        async def __aenter__(self):
+            listening["up"] = True
+            entered.append("enter")
+            return self
+
+        async def __aexit__(self, *_args: object) -> bool:
+            entered.append("exit")
+            listening["up"] = False
+            return False
+
+    class FakeServer:
+        port = 17321
+
+        def serve(self) -> FakeServe:
+            return FakeServe()
+
+    monkeypatch.setattr(main, "auth_bridge_listening", lambda port=17321, host="127.0.0.1": listening["up"])
+    monkeypatch.setattr(main, "build_runtime", lambda: (FakeServer(), object()))
+
+    async with main.maybe_embed_auth_bridge() as embedded:
+        assert embedded is True
+        assert entered == ["enter"]
+
+    assert entered == ["enter", "exit"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_attaches_when_auth_bridge_already_listening(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cloak_browser_auth import main
+
+    monkeypatch.setattr(main, "auth_bridge_listening", lambda port=17321, host="127.0.0.1": True)
+
+    def boom() -> None:
+        raise AssertionError("should not start a second auth bridge")
+
+    monkeypatch.setattr(main, "build_runtime", boom)
+
+    async with main.maybe_embed_auth_bridge() as embedded:
+        assert embedded is False
+
+
+@pytest.mark.asyncio
+async def test_mcp_attaches_if_embed_loses_the_port_race(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cloak_browser_auth import main
+
+    listening = {"up": False}
+
+    class FakeServe:
+        async def __aenter__(self):
+            listening["up"] = True
+            raise OSError("address already in use")
+
+        async def __aexit__(self, *_args: object) -> bool:
+            return False
+
+    class FakeServer:
+        port = 17321
+
+        def serve(self) -> FakeServe:
+            return FakeServe()
+
+    monkeypatch.setattr(main, "auth_bridge_listening", lambda port=17321, host="127.0.0.1": listening["up"])
+    monkeypatch.setattr(main, "build_runtime", lambda: (FakeServer(), object()))
+
+    async with main.maybe_embed_auth_bridge() as embedded:
+        assert embedded is False

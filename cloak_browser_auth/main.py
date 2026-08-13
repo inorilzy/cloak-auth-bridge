@@ -4,7 +4,11 @@ import argparse
 import asyncio
 import logging
 import os
+import socket
 import sys
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from cloak_browser_auth.auth_bridge_rpc import AuthBridgeClient
 from cloak_browser_auth.cloak_profiles import CloakProfileManager
@@ -15,16 +19,20 @@ from cloak_browser_auth.debug_session import (
     new_tab,
     open_session,
     print_json,
+    profile_operation,
     run_holder,
     status,
 )
 from cloak_browser_auth.extension_bridge import ExtensionBridge
 from cloak_browser_auth.mcp_server import build_server, run_stdio
+from cloak_browser_auth.reverse_session import ReverseSession
 from cloak_browser_auth.secret_store import copy_token_to_clipboard, load_or_create_token
 from cloak_browser_auth.service import AuthService
 from cloak_browser_auth.websocket_server import ExtensionWebSocketServer
 
-AUTH_BRIDGE_URL = "ws://127.0.0.1:17321/auth"
+AUTH_BRIDGE_PORT = 17321
+AUTH_BRIDGE_URL = f"ws://127.0.0.1:{AUTH_BRIDGE_PORT}/auth"
+LOGGER = logging.getLogger(__name__)
 
 
 def _client_token() -> str:
@@ -44,7 +52,7 @@ def build_runtime() -> tuple[ExtensionWebSocketServer, AuthService]:
     }
     token = load_or_create_token() if require_token else None
     bridge = ExtensionBridge(token, allow_loopback_trust=not require_token)
-    service = AuthService(registry, bridge, CloakProfileManager(registry))
+    service = AuthService(registry, bridge, CloakProfileManager(registry, holder=profile_operation))
     websocket_server = ExtensionWebSocketServer(
         bridge,
         service=service,
@@ -57,14 +65,51 @@ def build_mcp_service() -> AuthBridgeClient:
     return AuthBridgeClient(AUTH_BRIDGE_URL, _client_token())
 
 
+def auth_bridge_listening(port: int = AUTH_BRIDGE_PORT, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex((host, port)) == 0
+
+
+async def _wait_for_auth_bridge(port: int = AUTH_BRIDGE_PORT, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if auth_bridge_listening(port):
+            return
+        await asyncio.sleep(0.05)
+    raise RuntimeError(f"auth bridge on 127.0.0.1:{port} did not become ready")
+
+
+@asynccontextmanager
+async def maybe_embed_auth_bridge() -> AsyncIterator[bool]:
+    """Own :17321 in this process when free; otherwise attach to the existing listener."""
+    if auth_bridge_listening():
+        yield False
+        return
+
+    websocket_server, _service = build_runtime()
+    try:
+        async with websocket_server.serve():
+            await _wait_for_auth_bridge(websocket_server.port)
+            LOGGER.info("Embedded auth bridge on ws://127.0.0.1:%s", websocket_server.port)
+            yield True
+    except OSError:
+        if auth_bridge_listening():
+            LOGGER.info("Auth bridge already listening; attaching as client")
+            yield False
+            return
+        raise
+
+
 async def run_mcp() -> None:
-    await run_stdio(build_server(build_mcp_service()))
+    async with maybe_embed_auth_bridge():
+        await run_stdio(build_server(build_mcp_service(), ReverseSession()))
 
 
 async def run_daemon() -> None:
     websocket_server, _service = build_runtime()
     async with websocket_server.serve():
-        logging.getLogger(__name__).info("Listening on ws://127.0.0.1:17321")
+        LOGGER.info("Listening on ws://127.0.0.1:17321")
         await asyncio.Event().wait()
 
 
@@ -72,8 +117,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cloak Browser Auth local daemon")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("mcp", help="Run MCP stdio + websocket bridge")
-    subparsers.add_parser("serve", help="Run websocket bridge only")
+    subparsers.add_parser("mcp", help="Run MCP stdio and start the auth bridge on :17321 if it is free")
+    subparsers.add_parser("serve", help="Optional standalone auth bridge if you want the extension connected without an IDE")
     subparsers.add_parser("pair", help="Copy pairing token to clipboard")
     subparsers.add_parser("doctor", help="Validate local config")
 

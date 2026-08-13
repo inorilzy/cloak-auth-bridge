@@ -11,7 +11,7 @@ from mcp.server.models import InitializationOptions
 
 from cloak_browser_auth import __version__, debug_session
 from cloak_browser_auth.auth_bridge_rpc import AuthBridgeClient
-from cloak_browser_auth.reverse_session import SESSION
+from cloak_browser_auth.reverse_session import ReverseSession
 
 
 def _json_content(result: dict[str, Any]) -> list[types.TextContent]:
@@ -22,8 +22,9 @@ def _tool(name: str, description: str, schema: dict[str, Any]) -> types.Tool:
     return types.Tool(name=name, description=description, inputSchema=schema)
 
 
-def build_server(service: AuthBridgeClient) -> Server:
+def build_server(service: AuthBridgeClient, session: ReverseSession | None = None) -> Server:
     server = Server("cloak-browser-auth")
+    reverse = session or ReverseSession()
 
     empty = {"type": "object", "additionalProperties": False}
 
@@ -92,7 +93,7 @@ def build_server(service: AuthBridgeClient) -> Server:
             ),
             _tool(
                 "cloak_debug_tab",
-                "Open another HTTPS tab in the active Cloak session.",
+                "Open another HTTPS tab on the Playwright data plane. Requires cloak_debug_open first.",
                 {
                     "type": "object",
                     "properties": {"url": {"type": "string"}},
@@ -422,7 +423,7 @@ def build_server(service: AuthBridgeClient) -> Server:
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
         args = arguments or {}
         try:
-            result = await _dispatch(service, name, args)
+            result = await _dispatch(service, reverse, name, args)
         except Exception as exc:
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return _json_content(result)
@@ -430,7 +431,12 @@ def build_server(service: AuthBridgeClient) -> Server:
     return server
 
 
-async def _dispatch(service: AuthBridgeClient, name: str, args: dict[str, Any]) -> dict[str, Any]:
+async def _dispatch(
+    service: AuthBridgeClient,
+    session: ReverseSession,
+    name: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
     # auth
     if name == "auth_list_sites":
         return await service.list_sites()
@@ -445,61 +451,56 @@ async def _dispatch(service: AuthBridgeClient, name: str, args: dict[str, Any]) 
     if name == "cloak_debug_open":
         profile_id = args.get("profile_id", "shared-main")
         result = await service.ensure_holder(profile_id, args.get("url") or [])
-        return await SESSION.connect_holder(profile_id, result)
+        return await session.connect_holder(profile_id, result)
     if name == "cloak_debug_tab":
-        if SESSION.active:
-            return await SESSION.new_tab(args["url"])
-        return await debug_session.new_tab(args["url"])
+        return await session.new_tab(args["url"])
     if name == "cloak_debug_list":
-        if SESSION.active:
-            return await SESSION.list_pages()
-        return await asyncio.to_thread(debug_session.list_tabs)
+        return await session.list_pages()
     if name == "cloak_debug_status":
-        status = SESSION.status()
-        # include external holder info only as secondary signal
+        status = session.status()
         try:
-            status["external_holder"] = await asyncio.to_thread(debug_session.status)
+            status["holder"] = await asyncio.to_thread(debug_session.status)
         except Exception:
-            status["external_holder"] = None
+            status["holder"] = None
         return status
     if name == "cloak_debug_close":
         if args.get("confirm") is not True:
             raise ValueError("cloak_debug_close requires confirm=true")
-        return await SESSION.close_session(args["profile_id"])
+        return await session.close_session(args["profile_id"])
 
     # reverse attach
     if name == "reverse_attach":
-        return await SESSION.ensure_attached(args.get("cdp_http"))
+        return await session.ensure_attached(args.get("cdp_http"))
     if name == "reverse_detach":
-        return await SESSION.detach()
+        return await session.detach()
     if name == "reverse_status":
-        return SESSION.status()
+        return session.status()
 
     # reverse tools
     if name == "select_page":
-        return await SESSION.select_page(args.get("page_idx"), int(args.get("page_size", 20)))
+        return await session.select_page(args.get("page_idx"), int(args.get("page_size", 20)))
     if name == "new_page":
-        return await SESSION.new_page(args["url"])
+        return await session.new_page(args["url"])
     if name == "navigate_page":
-        return await SESSION.navigate_page(
+        return await session.navigate_page(
             type=args.get("type", "url"),
             url=args.get("url"),
             ignore_cache=bool(args.get("ignore_cache", False)),
         )
     if name == "select_frame":
-        return await SESSION.select_frame(args.get("frame_idx"), int(args.get("page_size", 20)))
+        return await session.select_frame(args.get("frame_idx"), int(args.get("page_size", 20)))
     if name == "click_element":
-        return await SESSION.click_element(
+        return await session.click_element(
             args["selector"],
             int(args.get("index", 0)),
             int(args.get("timeout_ms", 5000)),
         )
     if name == "take_screenshot":
-        return await SESSION.take_screenshot(bool(args.get("full_page", False)), args.get("file_path"))
+        return await session.take_screenshot(bool(args.get("full_page", False)), args.get("file_path"))
     if name == "list_console_messages":
-        return await SESSION.list_console_messages(args.get("msgid"), args.get("type"), int(args.get("page_size", 20)))
+        return await session.list_console_messages(args.get("msgid"), args.get("type"), int(args.get("page_size", 20)))
     if name == "list_network_requests":
-        return await SESSION.list_network_requests(
+        return await session.list_network_requests(
             args.get("reqid"),
             args.get("cookie_name"),
             args.get("resource_type"),
@@ -507,15 +508,15 @@ async def _dispatch(service: AuthBridgeClient, name: str, args: dict[str, Any]) 
             bool(args.get("include_body", False)),
         )
     if name == "clear_network_requests":
-        return await SESSION.clear_network_requests(bool(args.get("confirm", False)))
+        return await session.clear_network_requests(bool(args.get("confirm", False)))
     if name == "get_request_initiator":
-        return await SESSION.get_request_initiator(int(args["reqid"]))
+        return await session.get_request_initiator(int(args["reqid"]))
     if name == "get_websocket_messages":
-        return await SESSION.get_websocket_messages(args.get("connection_id"), int(args.get("page_size", 50)))
+        return await session.get_websocket_messages(args.get("connection_id"), int(args.get("page_size", 50)))
     if name == "list_scripts":
-        return await SESSION.list_scripts(int(args.get("page_size", 50)))
+        return await session.list_scripts(int(args.get("page_size", 50)))
     if name == "get_script_source":
-        return await SESSION.get_script_source(
+        return await session.get_script_source(
             args.get("script_id"),
             args.get("url"),
             int(args.get("start_line", 1)),
@@ -523,45 +524,45 @@ async def _dispatch(service: AuthBridgeClient, name: str, args: dict[str, Any]) 
             int(args.get("max_chars", 20000)),
         )
     if name == "save_script_source":
-        return await SESSION.save_script_source(args["file_path"], args.get("script_id"), args.get("url"))
+        return await session.save_script_source(args["file_path"], args.get("script_id"), args.get("url"))
     if name == "search_in_sources":
-        return await SESSION.search_in_sources(
+        return await session.search_in_sources(
             args["query"],
             bool(args.get("case_sensitive", False)),
             bool(args.get("is_regex", False)),
             int(args.get("max_matches", 50)),
         )
     if name == "set_breakpoint_on_text":
-        return await SESSION.set_breakpoint_on_text(
+        return await session.set_breakpoint_on_text(
             args["text"],
             args.get("url_filter"),
             int(args.get("occurrence", 1)),
         )
     if name == "break_on_xhr":
-        return await SESSION.break_on_xhr(args["url_pattern"])
+        return await session.break_on_xhr(args["url_pattern"])
     if name == "remove_breakpoint":
-        return await SESSION.remove_breakpoint(
+        return await session.remove_breakpoint(
             args["action"],
             args.get("breakpoint_id"),
             args.get("url_pattern"),
             bool(args.get("confirm", False)),
         )
     if name == "list_breakpoints":
-        return await SESSION.list_breakpoints()
+        return await session.list_breakpoints()
     if name == "get_paused_info":
-        return await SESSION.get_paused_info(int(args.get("frame_index", 0)))
+        return await session.get_paused_info(int(args.get("frame_index", 0)))
     if name == "pause_or_resume":
-        return await SESSION.pause_or_resume(args["action"])
+        return await session.pause_or_resume(args["action"])
     if name == "step":
-        return await SESSION.step(args.get("type", "over"))
+        return await session.step(args.get("type", "over"))
     if name == "evaluate_script":
-        return await SESSION.evaluate_script(
+        return await session.evaluate_script(
             args["function"],
             args.get("frame_index"),
             bool(args.get("await_promise", True)),
         )
     if name == "clear_site_data":
-        return await SESSION.clear_site_data(
+        return await session.clear_site_data(
             bool(args.get("confirm", False)),
             bool(args.get("include_http_cache", False)),
         )

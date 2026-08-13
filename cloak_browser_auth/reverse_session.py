@@ -145,18 +145,17 @@ class ReverseSession:
         urls: list[str] | None = None,
         headless: bool | None = None,
     ) -> dict[str, Any]:
-        """Ensure a holder exists, then connect this MCP process to it."""
+        """Connect to a daemon-owned holder. Never launches a browser."""
         del headless
+        urls = urls or []
+        for url in urls:
+            if not url.startswith("https://"):
+                raise ValueError(f"only https URLs are allowed: {_safe_url(url)}")
+
         async with self._lock:
             if self.active:
                 if self._profile_id == profile_id and not self._attached_cdp:
-                    opened = []
-                    for url in urls or []:
-                        result = await debug_session.new_tab(url)
-                        opened.append(str(result["opened"]))
-                    await self._refresh_pages()
-                    if self._pages:
-                        await self._ensure_page_domains(self._pages[self._selected_page_idx])
+                    opened = await self._open_urls_unlocked(urls)
                     return {
                         "ok": True,
                         "action": "open",
@@ -171,26 +170,37 @@ class ReverseSession:
                     f"reverse session already attached to profile={self._profile_id}; detach before switching"
                 )
 
-            result = await asyncio.to_thread(debug_session.open_session, profile_id, urls or [])
             holder = debug_session.load_session()
-            if holder is None:
-                raise RuntimeError("holder did not publish a verified session")
+            if holder is None or holder.profile_id != profile_id:
+                raise RuntimeError(
+                    "No holder for this profile. Call cloak_debug_open so the independent daemon can start it."
+                )
             await self._connect_holder_unlocked(holder)
-            await self._refresh_pages()
-            if self._pages:
-                self._selected_page_idx = 0
-                await self._ensure_page_domains(self._pages[0])
+            opened = await self._open_urls_unlocked(urls)
             return {
                 "ok": True,
                 "action": "open",
-                "reused": bool(result.get("reused", False)),
+                "reused": True,
                 "mode": "attached-holder",
                 "profile_id": profile_id,
                 "profile_path": holder.profile_path,
-                "opened": result.get("opened", []),
+                "opened": opened,
                 "pages": self._page_summaries(),
                 "control": "python-cloakbrowser-holder",
             }
+
+    async def _open_urls_unlocked(self, urls: list[str]) -> list[str]:
+        assert self._context is not None
+        opened: list[str] = []
+        for url in urls:
+            page = await self._context.new_page()
+            await page.goto(url, wait_until="domcontentloaded")
+            opened.append(_safe_url(page.url))
+        await self._refresh_pages()
+        if self._pages:
+            self._selected_page_idx = max(0, len(self._pages) - 1)
+            await self._ensure_page_domains(self._pages[self._selected_page_idx])
+        return opened
 
     async def connect_holder(self, profile_id: str, open_result: dict[str, Any]) -> dict[str, Any]:
         """Connect after the independent daemon has started or reused a holder."""
@@ -220,6 +230,8 @@ class ReverseSession:
 
 
     async def new_tab(self, url: str) -> dict[str, Any]:
+        if not url.startswith("https://"):
+            raise ValueError(f"only https URLs are allowed: {_safe_url(url)}")
         await self.ensure_ready()
         assert self._context is not None
         page = await self._context.new_page()
@@ -1304,5 +1316,4 @@ class ReverseSession:
         }
 
 
-# Process-wide singleton used by MCP tool handlers.
-SESSION = ReverseSession()
+

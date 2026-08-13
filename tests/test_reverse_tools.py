@@ -46,20 +46,14 @@ def test_mcp_source_registers_js_reverse_equivalent_tools() -> None:
     for name in REQUIRED_REVERSE_TOOLS:
         assert f'"{name}"' in source
     assert ReverseSession is not None
-    assert SESSION_STATUS_DEFAULT_INACTIVE()
+    status = ReverseSession().status()
+    assert status["ok"] is True and status["active"] is False
 
 
 @pytest.mark.asyncio
 async def test_mcp_close_requires_confirmation() -> None:
     with pytest.raises(ValueError, match="confirm=true"):
-        await mcp_server._dispatch(object(), "cloak_debug_close", {"profile_id": "shared-main"})
-
-
-def SESSION_STATUS_DEFAULT_INACTIVE() -> bool:
-    from cloak_browser_auth.reverse_session import SESSION
-
-    status = SESSION.status()
-    return status["ok"] is True and status["active"] is False
+        await mcp_server._dispatch(object(), ReverseSession(), "cloak_debug_close", {"profile_id": "shared-main"})
 
 
 def test_status_reports_mode_field() -> None:
@@ -121,7 +115,7 @@ def test_disconnected_holder_client_is_not_active() -> None:
 
 
 @pytest.mark.asyncio
-async def test_open_reuses_holder_and_connects_without_closing_it(monkeypatch) -> None:
+async def test_open_profile_connects_existing_holder_without_spawning(monkeypatch) -> None:
     holder = DebugSession(
         profile_id="shared-main",
         profile_path="profile",
@@ -132,10 +126,10 @@ async def test_open_reuses_holder_and_connects_without_closing_it(monkeypatch) -
         instance_id="test",
         endpoint="pipe://holder",
     )
-    opened: list[str] = []
+    spawned: list[object] = []
     monkeypatch.setattr(
         "cloak_browser_auth.reverse_session.debug_session.open_session",
-        lambda profile_id, urls: opened.extend(urls) or {"session": holder.to_public_dict()},
+        lambda *_args, **_kwargs: spawned.append("spawned") or {},
     )
     monkeypatch.setattr("cloak_browser_auth.reverse_session.debug_session.load_session", lambda: holder)
     session = ReverseSession()
@@ -145,14 +139,52 @@ async def test_open_reuses_holder_and_connects_without_closing_it(monkeypatch) -
         session._browser = object()
         session._context = FakeContext()
         session._profile_id = value.profile_id
+        session._profile_path = value.profile_path
 
     monkeypatch.setattr(session, "_connect_holder_unlocked", fake_connect)
 
-    result = await session.open_profile("shared-main", ["https://www.bilibili.com/"])
+    result = await session.open_profile("shared-main")
 
-    assert opened == ["https://www.bilibili.com/"]
+    assert spawned == []
     assert result["mode"] == "attached-holder"
     assert result["profile_id"] == "shared-main"
+    assert result["opened"] == []
+
+
+@pytest.mark.asyncio
+async def test_open_profile_does_not_spawn_when_no_holder(monkeypatch) -> None:
+    spawned: list[object] = []
+    monkeypatch.setattr(
+        "cloak_browser_auth.reverse_session.debug_session.open_session",
+        lambda *_args, **_kwargs: spawned.append("spawned") or {},
+    )
+    monkeypatch.setattr("cloak_browser_auth.reverse_session.debug_session.load_session", lambda: None)
+
+    with pytest.raises(RuntimeError, match="cloak_debug_open"):
+        await ReverseSession().open_profile("shared-main")
+    assert spawned == []
+
+
+@pytest.mark.asyncio
+async def test_debug_tab_uses_reverse_session_not_holder_http() -> None:
+    session = ReverseSession()
+    calls: list[str] = []
+
+    async def fake_new_tab(url: str) -> dict[str, object]:
+        calls.append(url)
+        return {"ok": True, "url": url}
+
+    session.new_tab = fake_new_tab  # type: ignore[method-assign]
+
+    result = await mcp_server._dispatch(
+        object(),
+        session,
+        "cloak_debug_tab",
+        {"url": "https://x.com/home"},
+    )
+
+    assert result == {"ok": True, "url": "https://x.com/home"}
+    assert calls == ["https://x.com/home"]
 
 
 @pytest.mark.asyncio
