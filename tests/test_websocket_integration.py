@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import pytest
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
 from cloak_browser_auth.crypto import create_proof, verify_proof
@@ -10,13 +10,17 @@ from cloak_browser_auth.extension_bridge import ExtensionBridge
 from cloak_browser_auth.websocket_server import ExtensionWebSocketServer
 
 
-async def _hello(websocket, challenge: str = "abcdefghijklmnop") -> None:
+async def _hello(
+    websocket: ClientConnection,
+    challenge: str = "abcdefghijklmnop",
+    profile_alias: str = "chrome-default",
+) -> None:
     await websocket.send(
         json.dumps(
             {
                 "type": "hello",
                 "extension_id": "abcdefghijklmnopabcdefghijklmnop",
-                "profile_alias": "chrome-default",
+                "profile_alias": profile_alias,
                 "challenge": challenge,
             }
         )
@@ -42,6 +46,7 @@ async def test_loopback_trust_connects_without_token() -> None:
             }
             assert len(ack["server_challenge"]) >= 16
             assert bridge.connected is True
+            assert bridge.profile_alias == "chrome-default"
 
             async def respond_to_capture() -> None:
                 request = json.loads(await websocket.recv())
@@ -79,6 +84,97 @@ async def test_loopback_trust_connects_without_token() -> None:
             )
             await response_task
             assert bundle.site_id == "bilibili-main"
+
+
+@pytest.mark.asyncio
+async def test_different_profile_cannot_replace_connected_extension() -> None:
+    bridge = ExtensionBridge(None, allow_loopback_trust=True)
+    websocket_server = ExtensionWebSocketServer(bridge, port=0)
+
+    async with websocket_server.serve() as running_server:
+        port = running_server.sockets[0].getsockname()[1]
+        async with connect(f"ws://127.0.0.1:{port}") as first:
+            await _hello(first, profile_alias="chrome-default")
+            await first.recv()
+
+            async with connect(f"ws://127.0.0.1:{port}") as second:
+                await _hello(second, profile_alias="chrome-work")
+                with pytest.raises(ConnectionClosed):
+                    await second.recv()
+
+            assert bridge.connected is True
+            assert bridge.profile_alias == "chrome-default"
+            await first.send(json.dumps({"type": "ping", "at": 1}))
+            assert json.loads(await first.recv()) == {"type": "pong", "at": 1}
+
+
+@pytest.mark.asyncio
+async def test_same_profile_reconnect_replaces_connected_extension() -> None:
+    bridge = ExtensionBridge(None, allow_loopback_trust=True)
+    websocket_server = ExtensionWebSocketServer(bridge, port=0)
+
+    async with websocket_server.serve() as running_server:
+        port = running_server.sockets[0].getsockname()[1]
+        async with connect(f"ws://127.0.0.1:{port}") as first:
+            await _hello(first, profile_alias="chrome-default")
+            await first.recv()
+
+            async with connect(f"ws://127.0.0.1:{port}") as second:
+                await _hello(second, profile_alias="chrome-default")
+                ack = json.loads(await second.recv())
+                assert ack["ok"] is True
+                with pytest.raises(ConnectionClosed):
+                    await first.recv()
+
+                assert bridge.connected is True
+                assert bridge.profile_alias == "chrome-default"
+                await second.send(json.dumps({"type": "ping", "at": 2}))
+                assert json.loads(await second.recv()) == {"type": "pong", "at": 2}
+
+
+@pytest.mark.asyncio
+async def test_capture_source_profile_must_match_connected_extension() -> None:
+    bridge = ExtensionBridge(None, allow_loopback_trust=True)
+    websocket_server = ExtensionWebSocketServer(bridge, port=0)
+
+    async with websocket_server.serve() as running_server:
+        port = running_server.sockets[0].getsockname()[1]
+        async with connect(f"ws://127.0.0.1:{port}") as websocket:
+            await _hello(websocket, profile_alias="chrome-default")
+            await websocket.recv()
+
+            capture_task = asyncio.create_task(
+                bridge.capture(
+                    "bilibili-main",
+                    ["bilibili.com"],
+                    ["https://www.bilibili.com"],
+                )
+            )
+            request = json.loads(await websocket.recv())
+            await websocket.send(
+                json.dumps(
+                    {
+                        "id": request["id"],
+                        "type": "capture_auth_result",
+                        "nonce": request["nonce"],
+                        "ok": True,
+                        "payload": {
+                            "version": 1,
+                            "siteId": "bilibili-main",
+                            "sourceProfile": "chrome-work",
+                            "capturedAt": "2026-08-10T14:00:00Z",
+                            "cookies": [],
+                            "origins": [],
+                        },
+                    }
+                )
+            )
+
+            with pytest.raises(ValueError, match="source profile mismatch"):
+                await capture_task
+
+            await websocket.send(json.dumps({"type": "ping", "at": 2}))
+            assert json.loads(await websocket.recv()) == {"type": "pong", "at": 2}
 
 
 @pytest.mark.asyncio

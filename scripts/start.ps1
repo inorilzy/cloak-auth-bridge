@@ -3,15 +3,14 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $mcpConfig = Join-Path $projectRoot ".cursor\mcp.json"
 
-Write-Host "Cloak Browser Auth — recommended entry is MCP (extension bridge included)."
+Write-Host "Cloak Browser Auth — run the auth bridge independently from MCP."
 Write-Host ""
-Write-Host "Do NOT keep a long-running independent 'serve' process if your IDE already runs MCP."
-Write-Host "One process provides both:"
-Write-Host "  - MCP stdio tools"
-Write-Host "  - Chrome extension WebSocket at ws://127.0.0.1:17321"
+Write-Host "Long-running auth bridge (one instance only):"
+Write-Host "  & `"$python`" -m cloak_browser_auth serve"
+Write-Host "  Chrome extension WebSocket: ws://127.0.0.1:17321"
 Write-Host ""
 Write-Host "IDE config example: $mcpConfig"
-Write-Host "Manual MCP launch (only if your client needs a foreground process):"
+Write-Host "MCP client (started by the IDE, or manually):"
 Write-Host "  & `"$python`" -m cloak_browser_auth mcp"
 Write-Host ""
 Write-Host "Pairing token (clipboard only):"
@@ -29,8 +28,3 @@ if (-not (Test-Path $python)) {
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-
-Write-Host ""
-Write-Host "Independent 'serve' remains available for emergencies only:"
-Write-Host "  & `"$python`" -m cloak_browser_auth serve"
-Write-Host "Stop it before starting MCP mode to avoid port 17321 conflicts."

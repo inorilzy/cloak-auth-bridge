@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -30,10 +31,6 @@ def _session_file() -> Path:
     return config.AUTH_DIR / "debug-session.json"
 
 
-def _stop_file() -> Path:
-    return config.AUTH_DIR / "debug-session.stop"
-
-
 @dataclass(frozen=True)
 class DebugSession:
     profile_id: str
@@ -42,6 +39,8 @@ class DebugSession:
     pid: int
     control_http: str
     started_at: str
+    instance_id: str
+    endpoint: str
     browser: str | None = None
     # Legacy field retained for older callers; always empty in the new model.
     cdp_http: str = ""
@@ -57,6 +56,8 @@ class DebugSession:
             pid=int(data["pid"]),
             control_http=control_http,
             started_at=str(data["started_at"]),
+            instance_id=str(data["instance_id"]),
+            endpoint=str(data["endpoint"]),
             browser=data.get("browser"),
             cdp_http=str(data.get("cdp_http") or ""),
         )
@@ -73,6 +74,13 @@ class DebugSession:
             "browser": self.browser,
             # Explicitly omit usable CDP endpoint so agents do not re-attach.
             "cdp_http": None,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self.to_public_dict(),
+            "instance_id": self.instance_id,
+            "endpoint": self.endpoint,
         }
 
 
@@ -116,14 +124,31 @@ def _pid_running(pid: int) -> bool:
 
 def _write_session(session: DebugSession) -> None:
     config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    _session_file().write_text(
-        json.dumps(session.to_public_dict(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    temp = _session_file().with_suffix(f".{session.instance_id}.tmp")
+    try:
+        temp.write_text(
+            json.dumps(session.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temp.replace(_session_file())
+    finally:
+        temp.unlink(missing_ok=True)
 
 
-def _clear_session_files() -> None:
-    for path in (_session_file(), _stop_file()):
+def _read_session() -> DebugSession | None:
+    try:
+        data = json.loads(_session_file().read_text(encoding="utf-8"))
+        return DebugSession.from_dict(data)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _clear_session_files(instance_id: str | None = None) -> None:
+    if instance_id is not None:
+        current = _read_session()
+        if current is not None and current.instance_id != instance_id:
+            return
+    for path in (_session_file(),):
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -131,20 +156,21 @@ def _clear_session_files() -> None:
 
 
 def load_session() -> DebugSession | None:
-    if not _session_file().exists():
+    session = _read_session()
+    if session is None:
+        return None
+    if not _port_open(session.port):
         return None
     try:
-        data = json.loads(_session_file().read_text(encoding="utf-8"))
-        session = DebugSession.from_dict(data)
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not _pid_running(session.pid) or not _port_open(session.port):
+        response = _control_request(session, {"op": "ping"}, timeout=2.0)
+        _verify_holder(session, response)
+    except Exception:
         return None
     return session
 
 
 def _control_request(session: DebugSession, payload: dict[str, Any], timeout: float = 60.0) -> dict[str, Any]:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    body = json.dumps({**payload, "instance_id": session.instance_id}, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         session.control_http.rstrip("/") + "/command",
         data=body,
@@ -170,27 +196,28 @@ def _control_request(session: DebugSession, payload: dict[str, Any], timeout: fl
     return data
 
 
-def _wait_for_control(port: int, timeout: float = 60.0) -> None:
+def _verify_holder(session: DebugSession, response: dict[str, Any]) -> None:
+    if (
+        response.get("instance_id") != session.instance_id
+        or int(response.get("pid") or 0) != session.pid
+        or response.get("profile_id") != session.profile_id
+    ):
+        raise RuntimeError("holder identity mismatch")
+
+
+def _wait_for_control(session: DebugSession, timeout: float = 60.0) -> None:
     deadline = time.time() + timeout
     last_error: Exception | None = None
     while time.time() < deadline:
-        if _port_open(port):
-            # Probe status once the port accepts TCP.
+        if _port_open(session.port):
             try:
-                probe = DebugSession(
-                    profile_id="probe",
-                    profile_path="",
-                    port=port,
-                    pid=os.getpid(),
-                    control_http=f"http://127.0.0.1:{port}",
-                    started_at=datetime.now(UTC).isoformat(),
-                )
-                _control_request(probe, {"op": "ping"}, timeout=2.0)
+                response = _control_request(session, {"op": "ping"}, timeout=2.0)
+                _verify_holder(session, response)
                 return
             except Exception as error:
                 last_error = error
         time.sleep(0.2)
-    raise RuntimeError(f"control port {port} did not become ready: {last_error}")
+    raise RuntimeError(f"control port {session.port} did not become ready: {last_error}")
 
 
 async def _open_urls(context: Any, urls: list[str]) -> list[str]:
@@ -203,17 +230,34 @@ async def _open_urls(context: Any, urls: list[str]) -> list[str]:
 
 
 class _HolderState:
-    def __init__(self, loop: asyncio.AbstractEventLoop, context: Any, profile_id: str, profile_path: str) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        context: Any,
+        profile_id: str,
+        profile_path: str,
+        instance_id: str,
+    ) -> None:
         self.loop = loop
         self.context = context
         self.profile_id = profile_id
         self.profile_path = profile_path
+        self.instance_id = instance_id
         self.stop_requested = False
+        self.browser_closed = asyncio.Event()
 
     async def handle(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("instance_id") != self.instance_id:
+            raise PermissionError("holder identity mismatch")
         op = str(payload.get("op") or "")
         if op == "ping":
-            return {"ok": True, "action": "ping"}
+            return {
+                "ok": True,
+                "action": "ping",
+                "instance_id": self.instance_id,
+                "pid": os.getpid(),
+                "profile_id": self.profile_id,
+            }
         if op == "status":
             pages = []
             for idx, page in enumerate(list(self.context.pages)):
@@ -235,7 +279,7 @@ class _HolderState:
                 "cdp_http": None,
             }
         if op == "list":
-            status = await self.handle({"op": "status"})
+            status = await self.handle({"op": "status", "instance_id": self.instance_id})
             return {
                 "ok": True,
                 "action": "list",
@@ -271,7 +315,40 @@ class _HolderState:
             page = pages[idx]
             value = await page.evaluate(expression)  # type: ignore[attr-defined]
             return {"ok": True, "action": "evaluate", "page_idx": idx, "value": value}
+        if op in {"auth_import", "auth_verify", "auth_clear"}:
+            from cloak_browser_auth.cloak_profiles import CloakProfileManager
+            from cloak_browser_auth.models import AuthBundle
+
+            site_id = str(payload.get("site_id") or "")
+            registry = Registry.load()
+            site, _profile = registry.target(site_id, self.profile_id)
+            manager = CloakProfileManager(registry)
+            if op == "auth_import":
+                bundle = AuthBundle.model_validate(payload.get("bundle"))
+                mode = str(payload.get("mode") or "merge")
+                verified = await manager.import_auth_in_context(self.context, site, bundle, mode)
+                return {
+                    "ok": True,
+                    "site_id": site.id,
+                    "target_profile": self.profile_id,
+                    "cookies_imported": len(bundle.cookies),
+                    "origins_imported": len(bundle.origins),
+                    "verified": verified,
+                }
+            if op == "auth_verify":
+                verified = await manager._verify_in_context(self.context, site)
+                return {"ok": True, "verified": verified}
+            cookies_cleared = await manager.clear_in_context(self.context, site)
+            return {
+                "ok": True,
+                "site_id": site.id,
+                "target_profile": self.profile_id,
+                "cookies_cleared": cookies_cleared,
+                "origins_cleared": len(site.origins),
+            }
         if op == "close":
+            if payload.get("confirm") is not True:
+                raise ValueError("holder close requires confirm=true")
             self.stop_requested = True
             return {"ok": True, "action": "close", "closing": True}
         raise ValueError(f"unknown op: {op}")
@@ -293,12 +370,8 @@ def _start_control_server(state: _HolderState, port: int) -> ThreadingHTTPServer
             self.wfile.write(body)
 
         def do_GET(self) -> None:
-            if self.path.rstrip("/") in {"", "/health", "/status"}:
-                future = asyncio.run_coroutine_threadsafe(holder.handle({"op": "status"}), holder.loop)
-                try:
-                    self._send(200, future.result(timeout=30))
-                except Exception as error:
-                    self._send(500, {"ok": False, "error": f"{type(error).__name__}: {error}"})
+            if self.path.rstrip("/") in {"", "/health"}:
+                self._send(200, {"ok": True, "service": "cloak-browser-holder"})
                 return
             self._send(404, {"ok": False, "error": "not found"})
 
@@ -324,13 +397,13 @@ def _start_control_server(state: _HolderState, port: int) -> ThreadingHTTPServer
     return server
 
 
-async def run_holder(profile_id: str, port: int, urls: list[str]) -> int:
+async def run_holder(profile_id: str, port: int, urls: list[str], instance_id: str) -> int:
     """Long-lived process that owns one CloakBrowser session and a local control plane."""
     from cloakbrowser import launch_persistent_context_async  # type: ignore[import-untyped]
 
-    config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    _stop_file().unlink(missing_ok=True)
+    from cloak_browser_auth.profile_lock import profile_lock
 
+    config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
     registry = Registry.load()
     if profile_id not in registry.profiles:
         raise SystemExit(f"unknown profile: {profile_id}")
@@ -341,59 +414,67 @@ async def run_holder(profile_id: str, port: int, urls: list[str]) -> int:
     if _port_open(port):
         raise SystemExit(f"control port already in use: {port}")
 
-    # Launch via Python cloakbrowser API. No remote-debugging-port: callers control
-    # this process over the local HTTP control plane instead of CDP re-attach.
-    context = await launch_persistent_context_async(
-        str(profile_path),
-        headless=profile.headless,
-    )
-    server: ThreadingHTTPServer | None = None
-    try:
-        opened = await _open_urls(context, urls)
-        loop = asyncio.get_running_loop()
-        state = _HolderState(loop, context, profile_id, str(profile_path))
-        server = _start_control_server(state, port)
-        session = DebugSession(
-            profile_id=profile_id,
-            profile_path=str(profile_path),
-            port=port,
-            pid=os.getpid(),
-            control_http=f"http://127.0.0.1:{port}",
-            started_at=datetime.now(UTC).isoformat(),
-            browser="cloakbrowser",
-            cdp_http="",
+    with profile_lock(profile_path):
+        context = await launch_persistent_context_async(
+            str(profile_path),
+            headless=profile.headless,
         )
-        _write_session(session)
-        print(
-            json.dumps(
-                {
-                    "ok": True,
-                    "event": "holder_ready",
-                    "mode": "owned-holder",
-                    "control": "python-cloakbrowser-holder",
-                    "session": session.to_public_dict(),
-                    "opened": opened,
-                },
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
-
-        while not _stop_file().exists() and not state.stop_requested:
-            await asyncio.sleep(0.5)
-            if not _session_file().exists():
-                break
-    finally:
-        if server is not None:
-            try:
-                server.shutdown()
-            except Exception as _shutdown_error:
-                _ = _shutdown_error
+        server: ThreadingHTTPServer | None = None
         try:
-            await context.close()
+            browser = context.browser
+            if browser is None:
+                raise RuntimeError("CloakBrowser persistent context has no browser")
+            endpoint = str(
+                (await browser.bind(
+                    f"cloak-browser-auth-{instance_id}", workspace_dir=str(config.PROJECT_ROOT)
+                ))["endpoint"]
+            )
+            opened = await _open_urls(context, urls)
+            loop = asyncio.get_running_loop()
+            state = _HolderState(loop, context, profile_id, str(profile_path), instance_id)
+            context.on("close", lambda _context: state.browser_closed.set())
+            server = _start_control_server(state, port)
+            session = DebugSession(
+                profile_id=profile_id,
+                profile_path=str(profile_path),
+                port=port,
+                pid=os.getpid(),
+                control_http=f"http://127.0.0.1:{port}",
+                started_at=datetime.now(UTC).isoformat(),
+                instance_id=instance_id,
+                endpoint=endpoint,
+                browser="cloakbrowser",
+                cdp_http="",
+            )
+            _write_session(session)
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "event": "holder_ready",
+                        "mode": "owned-holder",
+                        "control": "python-cloakbrowser-holder",
+                        "session": session.to_public_dict(),
+                        "opened": opened,
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+
+            while not state.stop_requested and not state.browser_closed.is_set():
+                await asyncio.sleep(0.5)
         finally:
-            _clear_session_files()
-            print(json.dumps({"ok": True, "event": "holder_closed"}, ensure_ascii=False), flush=True)
+            if server is not None:
+                try:
+                    server.shutdown()
+                except Exception as _shutdown_error:
+                    _ = _shutdown_error
+            try:
+                await context.close()
+            finally:
+                _clear_session_files(instance_id)
+                print(json.dumps({"ok": True, "event": "holder_closed"}, ensure_ascii=False), flush=True)
     return 0
 
 
@@ -402,8 +483,8 @@ def _control_hint(port: int) -> dict[str, object]:
         "control_http": f"http://127.0.0.1:{port}",
         "control": "python-cloakbrowser-holder",
         "preferred": (
-            "Use cloak_debug_open MCP tool (in-process) when possible. "
-            "CLI debug-* talks to the holder control HTTP API — do not CDP re-attach."
+            "Use cloak_debug_open to start or reuse the independent holder. "
+            "CLI debug-* uses its local control API; MCP uses Playwright connect."
         ),
         "commands": {
             "status": "debug-status",
@@ -411,16 +492,30 @@ def _control_hint(port: int) -> dict[str, object]:
             "list": "debug-list",
             "close": "debug-close",
         },
-        "note": "cdp_http is intentionally null. Python owns the browser context.",
+        "note": "cdp_http is intentionally null. The independent holder owns the browser context.",
     }
 
 
 def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEFAULT_CONTROL_PORT) -> dict[str, Any]:
     existing = load_session()
     if existing is not None:
-        raise RuntimeError(
-            f"debug session already running: profile={existing.profile_id} pid={existing.pid} port={existing.port}"
-        )
+        if existing.profile_id != profile_id:
+            raise RuntimeError(
+                f"debug session busy: profile={existing.profile_id} pid={existing.pid} port={existing.port}"
+            )
+        opened = []
+        for url in urls or []:
+            opened.append(_control_request(existing, {"op": "tab", "url": url})["opened"])
+        return {
+            "ok": True,
+            "action": "open",
+            "reused": True,
+            "mode": "owned-holder",
+            "control": "python-cloakbrowser-holder",
+            "session": existing.to_public_dict(),
+            "opened": opened,
+            "hint": _control_hint(existing.port),
+        }
     if _port_open(port):
         raise RuntimeError(f"control port already in use: {port}")
 
@@ -430,9 +525,9 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
             raise ValueError(f"only https URLs are allowed: {safe_url(url)}")
 
     config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    _stop_file().unlink(missing_ok=True)
     _session_file().unlink(missing_ok=True)
 
+    instance_id = secrets.token_urlsafe(32)
     cmd = [
         sys.executable,
         "-m",
@@ -442,6 +537,8 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
         profile_id,
         "--port",
         str(port),
+        "--instance-id",
+        instance_id,
     ]
     for url in urls:
         cmd.extend(["--url", url])
@@ -450,6 +547,8 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
     if os.name == "nt":
         creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) | int(
             getattr(subprocess, "DETACHED_PROCESS", 0)
+        ) | int(
+            getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         )
 
     log_path = config.AUTH_DIR / "debug-session.log"
@@ -466,12 +565,23 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
     finally:
         log_handle.close()
 
+    expected = DebugSession(
+        profile_id=profile_id,
+        profile_path=str(Registry.load().resolve_profile_path(Registry.load().profiles[profile_id])),
+        port=port,
+        pid=proc.pid,
+        control_http=f"http://127.0.0.1:{port}",
+        started_at="",
+        instance_id=instance_id,
+        endpoint="",
+        browser="cloakbrowser",
+    )
     try:
-        _wait_for_control(port, timeout=90.0)
+        _wait_for_control(expected, timeout=90.0)
     except Exception:
         if _pid_running(proc.pid):
             _terminate_pid(proc.pid)
-        _clear_session_files()
+        _clear_session_files(instance_id)
         raise
 
     deadline = time.time() + 10
@@ -480,17 +590,10 @@ def open_session(profile_id: str, urls: list[str] | None = None, port: int = DEF
         time.sleep(0.1)
         session = load_session()
     if session is None:
-        session = DebugSession(
-            profile_id=profile_id,
-            profile_path=str(Registry.load().resolve_profile_path(Registry.load().profiles[profile_id])),
-            port=port,
-            pid=proc.pid,
-            control_http=f"http://127.0.0.1:{port}",
-            started_at=datetime.now(UTC).isoformat(),
-            browser="cloakbrowser",
-            cdp_http="",
-        )
-        _write_session(session)
+        if _pid_running(proc.pid):
+            _terminate_pid(proc.pid)
+        _clear_session_files(instance_id)
+        raise RuntimeError("holder started without publishing a verified session")
 
     return {
         "ok": True,
@@ -523,9 +626,7 @@ def status() -> dict[str, Any]:
     session = load_session()
     if session is None:
         stale = _session_file().exists()
-        if stale:
-            _clear_session_files()
-        return {"ok": True, "action": "status", "active": False, "cleaned_stale": stale}
+        return {"ok": True, "action": "status", "active": False, "stale_registry": stale}
     try:
         live = _control_request(session, {"op": "status"}, timeout=10.0)
     except Exception as error:
@@ -541,6 +642,13 @@ def status() -> dict[str, Any]:
     live["port_open"] = _port_open(session.port)
     live["hint"] = _control_hint(session.port)
     return live
+
+
+async def profile_operation(profile_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    session = load_session()
+    if session is None or session.profile_id != profile_id:
+        return None
+    return await asyncio.to_thread(_control_request, session, payload)
 
 
 def _terminate_pid(pid: int) -> None:
@@ -562,20 +670,26 @@ def _terminate_pid(pid: int) -> None:
         return
 
 
-def close_session() -> dict[str, Any]:
-    session = load_session()
+def close_session(profile_id: str | None = None, instance_id: str | None = None) -> dict[str, Any]:
+    session = _read_session()
     if session is None:
-        _clear_session_files()
         return {"ok": True, "action": "close", "active": False}
+    if profile_id is not None and session.profile_id != profile_id:
+        raise RuntimeError("refusing to close a different profile holder")
+    if instance_id is not None and session.instance_id != instance_id:
+        raise RuntimeError("refusing to close a different holder instance")
+
+    try:
+        response = _control_request(session, {"op": "ping"}, timeout=2.0)
+        _verify_holder(session, response)
+    except Exception as error:
+        raise RuntimeError(f"refusing to close unverified holder identity: {error}") from error
 
     # Prefer graceful close through the holder control plane.
     try:
-        _control_request(session, {"op": "close"}, timeout=10.0)
+        _control_request(session, {"op": "close", "confirm": True}, timeout=10.0)
     except Exception as _close_error:
         _ = _close_error
-
-    config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    _stop_file().write_text("stop\n", encoding="utf-8")
 
     deadline = time.time() + 15
     while time.time() < deadline:
@@ -583,10 +697,9 @@ def close_session() -> dict[str, Any]:
             break
         time.sleep(0.2)
     else:
-        _terminate_pid(session.pid)
-        time.sleep(0.5)
+        raise RuntimeError("verified holder did not stop after explicit close; refusing PID-based force kill")
 
-    _clear_session_files()
+    _clear_session_files(session.instance_id)
     return {
         "ok": True,
         "action": "close",

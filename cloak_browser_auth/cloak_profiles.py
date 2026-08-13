@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from cloak_browser_auth.config import ProfileConfig, Registry, SiteConfig
 from cloak_browser_auth.converter import convert_cookie
 from cloak_browser_auth.models import AuthBundle, ClearResult, ImportResult
+from cloak_browser_auth.profile_lock import profile_lock
 
 SET_LOCAL_STORAGE_SCRIPT = """
 (items) => {
@@ -39,30 +40,26 @@ class CloakProfileManager:
             raise ValueError("replace mode requires a dedicated profile")
 
         async with self._locks[profile_id]:
-            context = await self._launch(profile)
-            try:
-                if mode == "replace":
-                    await context.clear_cookies()
-                    await self._clear_origins(context, site.origins)
+            from cloak_browser_auth.debug_session import profile_operation
 
-                cookies = [convert_cookie(cookie) for cookie in bundle.cookies]
-                if cookies:
-                    await context.add_cookies(cookies)
-                for origin_state in bundle.origins:
-                    page = await context.new_page()
-                    try:
-                        await page.goto(origin_state.origin, wait_until="domcontentloaded")
-                        self._require_origin(page.url, origin_state.origin)
-                        await page.evaluate(
-                            SET_LOCAL_STORAGE_SCRIPT,
-                            [item.model_dump() for item in origin_state.local_storage],
-                        )
-                    finally:
-                        await page.close()
-
-                verified = await self._verify_in_context(context, site)
-            finally:
-                await context.close()
+            holder_result = await profile_operation(
+                profile_id,
+                {
+                    "op": "auth_import",
+                    "site_id": site.id,
+                    "bundle": bundle.model_dump(mode="json", by_alias=True),
+                    "mode": mode,
+                },
+            )
+            if holder_result is not None:
+                return ImportResult.model_validate(holder_result)
+            profile_path = self.registry.resolve_profile_path(profile)
+            with profile_lock(profile_path):
+                context = await self._launch(profile)
+                try:
+                    verified = await self.import_auth_in_context(context, site, bundle, mode)
+                finally:
+                    await context.close()
 
         return ImportResult(
             site_id=site.id,
@@ -74,11 +71,21 @@ class CloakProfileManager:
 
     async def verify(self, site: SiteConfig, profile_id: str, profile: ProfileConfig) -> bool:
         async with self._locks[profile_id]:
-            context = await self._launch(profile)
-            try:
-                return await self._verify_in_context(context, site)
-            finally:
-                await context.close()
+            from cloak_browser_auth.debug_session import profile_operation
+
+            holder_result = await profile_operation(
+                profile_id,
+                {"op": "auth_verify", "site_id": site.id},
+            )
+            if holder_result is not None:
+                return bool(holder_result["verified"])
+            profile_path = self.registry.resolve_profile_path(profile)
+            with profile_lock(profile_path):
+                context = await self._launch(profile)
+                try:
+                    return await self._verify_in_context(context, site)
+                finally:
+                    await context.close()
 
     async def clear(
         self,
@@ -87,23 +94,63 @@ class CloakProfileManager:
         profile: ProfileConfig,
     ) -> ClearResult:
         async with self._locks[profile_id]:
-            context = await self._launch(profile)
-            try:
-                cookies_before = await context.cookies()
-                cookies_cleared = sum(
-                    self._cookie_matches_site(cookie["domain"], site) for cookie in cookies_before
-                )
-                for domain in site.cookie_domains:
-                    await context.clear_cookies(domain=re.compile(rf"(^|\.){re.escape(domain)}$"))
-                await self._clear_origins(context, site.origins)
-            finally:
-                await context.close()
+            from cloak_browser_auth.debug_session import profile_operation
+
+            holder_result = await profile_operation(
+                profile_id,
+                {"op": "auth_clear", "site_id": site.id},
+            )
+            if holder_result is not None:
+                return ClearResult.model_validate(holder_result)
+            profile_path = self.registry.resolve_profile_path(profile)
+            with profile_lock(profile_path):
+                context = await self._launch(profile)
+                try:
+                    cookies_cleared = await self.clear_in_context(context, site)
+                finally:
+                    await context.close()
         return ClearResult(
             site_id=site.id,
             target_profile=profile_id,
             cookies_cleared=cookies_cleared,
             origins_cleared=len(site.origins),
         )
+
+    async def import_auth_in_context(
+        self,
+        context: Any,
+        site: SiteConfig,
+        bundle: AuthBundle,
+        mode: str,
+    ) -> bool:
+        if mode == "replace":
+            await context.clear_cookies()
+            await self._clear_origins(context, site.origins)
+        cookies = [convert_cookie(cookie) for cookie in bundle.cookies]
+        if cookies:
+            await context.add_cookies(cookies)
+        for origin_state in bundle.origins:
+            page = await context.new_page()
+            try:
+                await page.goto(origin_state.origin, wait_until="domcontentloaded")
+                self._require_origin(page.url, origin_state.origin)
+                await page.evaluate(
+                    SET_LOCAL_STORAGE_SCRIPT,
+                    [item.model_dump() for item in origin_state.local_storage],
+                )
+            finally:
+                await page.close()
+        return await self._verify_in_context(context, site)
+
+    async def clear_in_context(self, context: Any, site: SiteConfig) -> int:
+        cookies_before = await context.cookies()
+        cookies_cleared = sum(
+            self._cookie_matches_site(cookie["domain"], site) for cookie in cookies_before
+        )
+        for domain in site.cookie_domains:
+            await context.clear_cookies(domain=re.compile(rf"(^|\.){re.escape(domain)}$"))
+        await self._clear_origins(context, site.origins)
+        return cookies_cleared
 
     async def _launch(self, profile: ProfileConfig) -> Any:
         try:

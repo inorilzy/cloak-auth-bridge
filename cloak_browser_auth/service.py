@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from cloak_browser_auth.cloak_profiles import CloakProfileManager
 from cloak_browser_auth.config import Registry
@@ -13,6 +13,16 @@ from cloak_browser_auth.extension_bridge import ExtensionBridge
 
 T = TypeVar("T")
 MIN_OPERATION_INTERVAL_SECONDS = 1.0
+
+
+class AuthOperations(Protocol):
+    async def list_sites(self) -> dict[str, Any]: ...
+
+    async def sync(self, site_id: str, target_profile: str, mode: str = "merge") -> dict[str, Any]: ...
+
+    async def verify(self, site_id: str, target_profile: str) -> dict[str, Any]: ...
+
+    async def clear(self, site_id: str, target_profile: str, confirm: bool) -> dict[str, Any]: ...
 
 
 class AuthService:

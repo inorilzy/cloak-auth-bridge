@@ -1,11 +1,11 @@
 {
   "mcpServers": {
     "cloak-browser-auth": {
-      "command": "uvx",
+      "command": ".venv/Scripts/python.exe",
       "args": [
-        "--from",
-        "git+https://github.com/inorilzy/cloak-browser-auth.git@v0.3.2",
-        "cloak-browser-auth-mcp"
+        "-m",
+        "cloak_browser_auth",
+        "mcp"
       ]
     }
   }

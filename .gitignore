@@ -6,6 +6,7 @@ profiles/
 .venv/
 __pycache__/
 .pytest_cache/
+.playwright-mcp/
 *.pyc
 *.egg-info/
 

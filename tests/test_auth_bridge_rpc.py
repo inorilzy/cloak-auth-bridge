@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from cloak_browser_auth.auth_bridge_rpc import AuthBridgeClient
+from cloak_browser_auth.extension_bridge import ExtensionBridge
+from cloak_browser_auth.main import build_mcp_service, build_runtime
+from cloak_browser_auth.websocket_server import ExtensionWebSocketServer
+
+
+class FakeAuthService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def list_sites(self) -> dict[str, Any]:
+        self.calls.append(("list_sites", ()))
+        return {"sites": [{"site_id": "bilibili-main"}]}
+
+    async def sync(self, site_id: str, target_profile: str, mode: str = "merge") -> dict[str, Any]:
+        self.calls.append(("sync", (site_id, target_profile, mode)))
+        return {"ok": True, "mode": mode}
+
+    async def verify(self, site_id: str, target_profile: str) -> dict[str, Any]:
+        self.calls.append(("verify", (site_id, target_profile)))
+        return {"ok": True, "verified": True}
+
+    async def clear(self, site_id: str, target_profile: str, confirm: bool) -> dict[str, Any]:
+        self.calls.append(("clear", (site_id, target_profile, confirm)))
+        return {"ok": True, "cookies_cleared": 1}
+
+
+@pytest.mark.asyncio
+async def test_authenticated_client_calls_auth_service_owned_by_daemon() -> None:
+    token = "0123456789abcdef"
+    service = FakeAuthService()
+    server = ExtensionWebSocketServer(
+        ExtensionBridge(),
+        service=service,
+        client_token=token,
+        port=0,
+    )
+
+    async with server.serve() as running_server:
+        port = running_server.sockets[0].getsockname()[1]
+        client = AuthBridgeClient(f"ws://127.0.0.1:{port}/auth", token)
+
+        assert await client.list_sites() == {"sites": [{"site_id": "bilibili-main"}]}
+        assert await client.sync("bilibili-main", "shared-main", "replace") == {
+            "ok": True,
+            "mode": "replace",
+        }
+        assert await client.verify("bilibili-main", "shared-main") == {
+            "ok": True,
+            "verified": True,
+        }
+        assert await client.clear("bilibili-main", "shared-main", True) == {
+            "ok": True,
+            "cookies_cleared": 1,
+        }
+
+    assert service.calls == [
+        ("list_sites", ()),
+        ("sync", ("bilibili-main", "shared-main", "replace")),
+        ("verify", ("bilibili-main", "shared-main")),
+        ("clear", ("bilibili-main", "shared-main", True)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_daemon_when_shared_token_does_not_match() -> None:
+    server = ExtensionWebSocketServer(
+        ExtensionBridge(),
+        service=FakeAuthService(),
+        client_token="correct-token-123",
+        port=0,
+    )
+
+    async with server.serve() as running_server:
+        port = running_server.sockets[0].getsockname()[1]
+        client = AuthBridgeClient(f"ws://127.0.0.1:{port}/auth", "wrong-token-456")
+
+        with pytest.raises(ConnectionError, match="authentication failed"):
+            await client.list_sites()
+
+
+@pytest.mark.asyncio
+async def test_mcp_requests_holder_launch_from_independent_daemon(monkeypatch) -> None:
+    token = "0123456789abcdef"
+    service = FakeAuthService()
+    launched: list[tuple[str, list[str]]] = []
+
+    def fake_open(profile_id: str, urls: list[str]) -> dict[str, Any]:
+        launched.append((profile_id, urls))
+        return {"ok": True, "action": "open", "reused": False}
+
+    monkeypatch.setattr("cloak_browser_auth.debug_session.open_session", fake_open)
+    server = ExtensionWebSocketServer(
+        ExtensionBridge(),
+        service=service,
+        client_token=token,
+        port=0,
+    )
+
+    async with server.serve() as running_server:
+        port = running_server.sockets[0].getsockname()[1]
+        client = AuthBridgeClient(f"ws://127.0.0.1:{port}/auth", token)
+
+        assert await client.ensure_holder("shared-main", ["https://www.bilibili.com/"]) == {
+            "ok": True,
+            "action": "open",
+            "reused": False,
+        }
+
+    assert launched == [("shared-main", ["https://www.bilibili.com/"])]
+
+
+def test_mcp_builds_client_while_serve_builds_websocket_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOAK_BROWSER_AUTH_CLIENT_TOKEN", "local-client-token")
+
+    websocket_server, service = build_runtime()
+    mcp_service = build_mcp_service()
+
+    assert websocket_server.service is service
+    assert websocket_server.client_token == "local-client-token"
+    assert isinstance(mcp_service, AuthBridgeClient)

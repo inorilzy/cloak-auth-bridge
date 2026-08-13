@@ -10,8 +10,8 @@ from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
 from cloak_browser_auth import __version__, debug_session
+from cloak_browser_auth.auth_bridge_rpc import AuthBridgeClient
 from cloak_browser_auth.reverse_session import SESSION
-from cloak_browser_auth.service import AuthService
 
 
 def _json_content(result: dict[str, Any]) -> list[types.TextContent]:
@@ -22,7 +22,7 @@ def _tool(name: str, description: str, schema: dict[str, Any]) -> types.Tool:
     return types.Tool(name=name, description=description, inputSchema=schema)
 
 
-def build_server(service: AuthService) -> Server:
+def build_server(service: AuthBridgeClient) -> Server:
     server = Server("cloak-browser-auth")
 
     empty = {"type": "object", "additionalProperties": False}
@@ -80,13 +80,12 @@ def build_server(service: AuthService) -> Server:
             # ---- cloak session lifecycle ----
             _tool(
                 "cloak_debug_open",
-                "Open one headed CloakBrowser session on an allowlisted auth profile in this MCP process via Python cloakbrowser. Tools control the same in-memory context (no CDP re-attach).",
+                "Start or reuse one headed CloakBrowser holder. MCP clients may disconnect without closing its pages.",
                 {
                     "type": "object",
                     "properties": {
                         "profile_id": {"type": "string", "default": "shared-main"},
                         "url": {"type": "array", "items": {"type": "string"}},
-                        "port": {"type": "integer", "default": 9333},
                     },
                     "additionalProperties": False,
                 },
@@ -103,11 +102,23 @@ def build_server(service: AuthService) -> Server:
             ),
             _tool("cloak_debug_list", "List page tabs in the active Cloak session.", empty),
             _tool("cloak_debug_status", "Show Cloak session/CDP status.", empty),
-            _tool("cloak_debug_close", "Close the active Cloak session and release the browser seat.", empty),
+            _tool(
+                "cloak_debug_close",
+                "Close the active Cloak session and release the browser seat. Requires confirm=true.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "profile_id": {"type": "string"},
+                        "confirm": {"type": "boolean"},
+                    },
+                    "required": ["profile_id", "confirm"],
+                    "additionalProperties": False,
+                },
+            ),
             # ---- reverse session attach ----
             _tool(
                 "reverse_attach",
-                "Optional/legacy: attach reverse tooling to an external CDP endpoint. Prefer cloak_debug_open, which already keeps an in-process Python browser context.",
+                "Optional/legacy: attach reverse tooling to an external CDP endpoint. Prefer cloak_debug_open, which connects to the independent browser holder.",
                 {
                     "type": "object",
                     "properties": {"cdp_http": {"type": "string"}},
@@ -419,7 +430,7 @@ def build_server(service: AuthService) -> Server:
     return server
 
 
-async def _dispatch(service: AuthService, name: str, args: dict[str, Any]) -> dict[str, Any]:
+async def _dispatch(service: AuthBridgeClient, name: str, args: dict[str, Any]) -> dict[str, Any]:
     # auth
     if name == "auth_list_sites":
         return await service.list_sites()
@@ -432,12 +443,9 @@ async def _dispatch(service: AuthService, name: str, args: dict[str, Any]) -> di
 
     # cloak lifecycle
     if name == "cloak_debug_open":
-        # Preferred path: launch Cloak in this MCP process via Python cloakbrowser.
-        # Tools then control the same in-memory context — no CDP re-attach required.
-        return await SESSION.open_profile(
-            args.get("profile_id", "shared-main"),
-            args.get("url") or [],
-        )
+        profile_id = args.get("profile_id", "shared-main")
+        result = await service.ensure_holder(profile_id, args.get("url") or [])
+        return await SESSION.connect_holder(profile_id, result)
     if name == "cloak_debug_tab":
         if SESSION.active:
             return await SESSION.new_tab(args["url"])
@@ -455,14 +463,9 @@ async def _dispatch(service: AuthService, name: str, args: dict[str, Any]) -> di
             status["external_holder"] = None
         return status
     if name == "cloak_debug_close":
-        closed = await SESSION.close_session()
-        # also stop any legacy external holder if still running
-        try:
-            holder = await asyncio.to_thread(debug_session.close_session)
-        except Exception as exc:
-            holder = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        closed["external_holder"] = holder
-        return closed
+        if args.get("confirm") is not True:
+            raise ValueError("cloak_debug_close requires confirm=true")
+        return await SESSION.close_session(args["profile_id"])
 
     # reverse attach
     if name == "reverse_attach":

@@ -66,9 +66,10 @@ class ExtensionBridge:
         self._allow_loopback_trust = allow_loopback_trust
         self._connection: WebSocketConnection | None = None
         self._extension_id: str | None = None
+        self._profile_alias: str | None = None
         self._pending: dict[
             str,
-            tuple[str, WebSocketConnection, asyncio.Future[AuthBundle]],
+            tuple[str, str, WebSocketConnection, asyncio.Future[AuthBundle]],
         ] = {}
         self._connection_lock = asyncio.Lock()
 
@@ -80,6 +81,10 @@ class ExtensionBridge:
     def extension_id(self) -> str | None:
         return self._extension_id
 
+    @property
+    def profile_alias(self) -> str | None:
+        return self._profile_alias
+
     async def handle(self, connection: WebSocketConnection) -> None:
         iterator = connection.__aiter__()
         raw_hello = await asyncio.wait_for(anext(iterator), timeout=10)
@@ -88,19 +93,9 @@ class ExtensionBridge:
             raise ValueError("invalid extension hello")
 
         server_challenge = secrets.token_urlsafe(24)
-        if self._allow_loopback_trust and not self._pairing_token:
-            await connection.send(
-                json.dumps(
-                    {
-                        "type": "hello_ack",
-                        "ok": True,
-                        "mode": "loopback_trust",
-                        "client_challenge": hello.challenge,
-                        "server_challenge": server_challenge,
-                    }
-                )
-            )
-        else:
+        mode = "loopback_trust"
+        if not (self._allow_loopback_trust and not self._pairing_token):
+            mode = "token"
             if not self._pairing_token:
                 raise ValueError("pairing token required when loopback trust is disabled")
             proof_payload = f"{hello.challenge}:{server_challenge}"
@@ -130,35 +125,36 @@ class ExtensionBridge:
             ):
                 raise ValueError("extension pairing authentication failed")
 
-            await connection.send(
-                json.dumps(
-                    {
-                        "type": "hello_ack",
-                        "ok": True,
-                        "mode": "token",
-                        "client_challenge": hello.challenge,
-                        "server_challenge": server_challenge,
-                    }
-                )
-            )
-
         async with self._connection_lock:
             previous = self._connection
+            if previous is not None and self._profile_alias != hello.profile_alias:
+                raise ValueError("a different Chrome profile is already connected")
             self._connection = connection
             self._extension_id = hello.extension_id
+            self._profile_alias = hello.profile_alias
             if previous is not None and previous is not connection:
                 LOGGER.warning("Replacing an existing authenticated extension connection")
                 self._fail_pending(ConnectionError("Chrome extension connection was replaced"))
                 await previous.close(code=1000, reason="replaced by a new authenticated connection")
 
-        mode = "loopback_trust" if self._allow_loopback_trust and not self._pairing_token else "token"
-        LOGGER.info(
-            "Chrome extension connected: id=%s profile=%s mode=%s",
-            hello.extension_id,
-            hello.profile_alias,
-            mode,
-        )
         try:
+            await connection.send(
+                json.dumps(
+                    {
+                        "type": "hello_ack",
+                        "ok": True,
+                        "mode": mode,
+                        "client_challenge": hello.challenge,
+                        "server_challenge": server_challenge,
+                    }
+                )
+            )
+            LOGGER.info(
+                "Chrome extension connected: id=%s profile=%s mode=%s",
+                hello.extension_id,
+                hello.profile_alias,
+                mode,
+            )
             async for raw_message in iterator:
                 await self._handle_message(connection, raw_message)
         finally:
@@ -166,6 +162,7 @@ class ExtensionBridge:
                 if self._connection is connection:
                     self._connection = None
                     self._extension_id = None
+                    self._profile_alias = None
                     self._fail_pending(ConnectionError("Chrome extension disconnected"))
             LOGGER.info("Chrome extension disconnected")
 
@@ -184,7 +181,7 @@ class ExtensionBridge:
         pending = self._pending.pop(result.id, None)
         if pending is None:
             return
-        expected_nonce, expected_connection, future = pending
+        expected_nonce, expected_profile_alias, expected_connection, future = pending
         if future.done():
             return
         if expected_connection is not connection:
@@ -199,6 +196,9 @@ class ExtensionBridge:
         if result.payload is None:
             future.set_exception(ValueError("capture response has no payload"))
             return
+        if result.payload.source_profile != expected_profile_alias:
+            future.set_exception(ValueError("capture response source profile mismatch"))
+            return
         future.set_result(result.payload)
 
     async def capture(
@@ -208,9 +208,6 @@ class ExtensionBridge:
         origins: list[str],
         timeout: float = 60,
     ) -> AuthBundle:
-        connection = self._connection
-        if connection is None:
-            raise RuntimeError("Chrome extension is not connected")
         if not cookie_domains:
             raise ValueError("cookie_domains must not be empty")
         if not origins:
@@ -219,7 +216,12 @@ class ExtensionBridge:
         request_id = str(uuid.uuid4())
         nonce = secrets.token_urlsafe(24)
         future = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = (nonce, connection, future)
+        async with self._connection_lock:
+            connection = self._connection
+            profile_alias = self._profile_alias
+            if connection is None or profile_alias is None:
+                raise RuntimeError("Chrome extension is not connected")
+            self._pending[request_id] = (nonce, profile_alias, connection, future)
         try:
             await connection.send(
                 json.dumps(
@@ -240,6 +242,6 @@ class ExtensionBridge:
     def _fail_pending(self, error: Exception) -> None:
         pending = list(self._pending.values())
         self._pending.clear()
-        for _nonce, _connection, future in pending:
+        for _nonce, _profile_alias, _connection, future in pending:
             if not future.done():
                 future.set_exception(error)

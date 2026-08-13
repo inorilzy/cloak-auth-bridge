@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 
+from cloak_browser_auth.auth_bridge_rpc import AuthBridgeClient
 from cloak_browser_auth.cloak_profiles import CloakProfileManager
 from cloak_browser_auth.config import Registry
 from cloak_browser_auth.debug_session import (
@@ -23,6 +24,13 @@ from cloak_browser_auth.secret_store import copy_token_to_clipboard, load_or_cre
 from cloak_browser_auth.service import AuthService
 from cloak_browser_auth.websocket_server import ExtensionWebSocketServer
 
+AUTH_BRIDGE_URL = "ws://127.0.0.1:17321/auth"
+
+
+def _client_token() -> str:
+    token = os.environ.get("CLOAK_BROWSER_AUTH_CLIENT_TOKEN", "").strip()
+    return token or load_or_create_token()
+
 
 def build_runtime() -> tuple[ExtensionWebSocketServer, AuthService]:
     registry = Registry.load()
@@ -36,15 +44,21 @@ def build_runtime() -> tuple[ExtensionWebSocketServer, AuthService]:
     }
     token = load_or_create_token() if require_token else None
     bridge = ExtensionBridge(token, allow_loopback_trust=not require_token)
-    websocket_server = ExtensionWebSocketServer(bridge)
     service = AuthService(registry, bridge, CloakProfileManager(registry))
+    websocket_server = ExtensionWebSocketServer(
+        bridge,
+        service=service,
+        client_token=_client_token(),
+    )
     return websocket_server, service
 
 
+def build_mcp_service() -> AuthBridgeClient:
+    return AuthBridgeClient(AUTH_BRIDGE_URL, _client_token())
+
+
 async def run_mcp() -> None:
-    websocket_server, service = build_runtime()
-    async with websocket_server.serve():
-        await run_stdio(build_server(service))
+    await run_stdio(build_server(build_mcp_service()))
 
 
 async def run_daemon() -> None:
@@ -78,6 +92,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     debug_hold = subparsers.add_parser("debug-hold", help=argparse.SUPPRESS)
     debug_hold.add_argument("--profile", required=True)
     debug_hold.add_argument("--port", type=int, default=19333)
+    debug_hold.add_argument("--instance-id", required=True)
     debug_hold.add_argument("--url", action="append", default=[])
 
     parser.set_defaults(command="mcp")
@@ -122,7 +137,7 @@ def main(argv: list[str] | None = None) -> None:
         print_json(close_session())
         return
     if args.command == "debug-hold":
-        raise SystemExit(asyncio.run(run_holder(args.profile, args.port, args.url)))
+        raise SystemExit(asyncio.run(run_holder(args.profile, args.port, args.url, args.instance_id)))
     try:
         asyncio.run(run_daemon() if args.command == "serve" else run_mcp())
     except KeyboardInterrupt:
