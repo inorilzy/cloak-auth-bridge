@@ -22,7 +22,7 @@ SET_LOCAL_STORAGE_SCRIPT = """
 
 
 class HolderProfileGateway(Protocol):
-    """Optional route into the live Holder so profile writes do not launch a second browser."""
+    """Optional route into the live in-process browser so profile writes do not launch a second one."""
 
     async def __call__(self, profile_id: str, payload: dict[str, Any]) -> dict[str, Any] | None: ...
 

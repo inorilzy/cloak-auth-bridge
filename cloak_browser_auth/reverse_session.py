@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from cloak_browser_auth import config, debug_session
+from cloak_browser_auth import config
 
 
 def _safe_url(url: str) -> str:
@@ -67,7 +67,7 @@ class WsFrame:
 
 
 class ReverseSession:
-    """MCP-side controller for a browser owned by the independent holder."""
+    """In-process CloakBrowser owner used by the MCP stdio server."""
 
     def __init__(self) -> None:
         self._playwright: Any | None = None
@@ -75,7 +75,8 @@ class ReverseSession:
         self._context: Any | None = None
         self._profile_id: str | None = None
         self._profile_path: str | None = None
-        self._holder_instance_id: str | None = None
+        self._owned = False
+        self._profile_lock_cm: Any | None = None
         self._pages: list[Any] = []
         self._selected_page_idx = 0
         self._selected_frame_idx = 0
@@ -104,10 +105,13 @@ class ReverseSession:
         return bool(connected()) if callable(connected) else True
 
     def status(self) -> dict[str, Any]:
+        mode = None
+        if self.active:
+            mode = "attached-cdp" if self._attached_cdp else ("owned" if self._owned else None)
         return {
             "ok": True,
             "active": self.active,
-            "mode": "attached-holder" if self.active and not self._attached_cdp else ("attached-cdp" if self.active else None),
+            "mode": mode,
             "profile_id": self._profile_id,
             "profile_path": self._profile_path,
             "cdp_http": self._attached_cdp or None,
@@ -125,18 +129,12 @@ class ReverseSession:
         }
 
     async def ensure_ready(self) -> None:
-        """Ensure a live context exists, reconnecting to the holder when needed."""
         async with self._lock:
             if self.active:
                 await self._refresh_pages()
                 return
-            holder = debug_session.load_session()
-            if holder is not None:
-                await self._connect_holder_unlocked(holder)
-                return
         raise RuntimeError(
-            "No active browser session. Call cloak_debug_open(profile_id=..., url=[...]) first; "
-            "it starts an independent CloakBrowser holder."
+            "No active browser session. Call cloak_debug_open(profile_id=..., url=[...]) first."
         )
 
     async def open_profile(
@@ -145,49 +143,93 @@ class ReverseSession:
         urls: list[str] | None = None,
         headless: bool | None = None,
     ) -> dict[str, Any]:
-        """Connect to a daemon-owned holder. Never launches a browser."""
-        del headless
+        """Launch or reuse an in-process CloakBrowser. It dies with this MCP process."""
         urls = urls or []
         for url in urls:
             if not url.startswith("https://"):
                 raise ValueError(f"only https URLs are allowed: {_safe_url(url)}")
 
         async with self._lock:
+            if self.active and self._owned and self._profile_id == profile_id and not self._attached_cdp:
+                opened = await self._open_urls_unlocked(urls)
+                return {
+                    "ok": True,
+                    "action": "open",
+                    "reused": True,
+                    "mode": "owned",
+                    "profile_id": self._profile_id,
+                    "profile_path": self._profile_path,
+                    "opened": opened,
+                    "pages": self._page_summaries(),
+                }
             if self.active:
-                if self._profile_id == profile_id and not self._attached_cdp:
-                    opened = await self._open_urls_unlocked(urls)
-                    return {
-                        "ok": True,
-                        "action": "open",
-                        "reused": True,
-                        "mode": "attached-holder",
-                        "profile_id": self._profile_id,
-                        "profile_path": self._profile_path,
-                        "opened": opened,
-                        "pages": self._page_summaries(),
-                    }
-                raise RuntimeError(
-                    f"reverse session already attached to profile={self._profile_id}; detach before switching"
-                )
+                await self._close_owned_unlocked()
 
-            holder = debug_session.load_session()
-            if holder is None or holder.profile_id != profile_id:
-                raise RuntimeError(
-                    "No holder for this profile. Call cloak_debug_open so the independent daemon can start it."
-                )
-            await self._connect_holder_unlocked(holder)
+            await self._launch_owned_unlocked(profile_id, headless)
             opened = await self._open_urls_unlocked(urls)
             return {
                 "ok": True,
                 "action": "open",
-                "reused": True,
-                "mode": "attached-holder",
-                "profile_id": profile_id,
-                "profile_path": holder.profile_path,
+                "reused": False,
+                "mode": "owned",
+                "profile_id": self._profile_id,
+                "profile_path": self._profile_path,
                 "opened": opened,
                 "pages": self._page_summaries(),
-                "control": "python-cloakbrowser-holder",
             }
+
+    async def _launch_owned_unlocked(self, profile_id: str, headless: bool | None) -> None:
+        from cloak_browser_auth.config import Registry
+        from cloak_browser_auth.profile_lock import profile_lock
+
+        registry = Registry.load()
+        if profile_id not in registry.profiles:
+            raise RuntimeError(f"unknown profile: {profile_id}")
+        profile = registry.profiles[profile_id]
+        profile_path = registry.resolve_profile_path(profile)
+        profile_path.mkdir(parents=True, exist_ok=True)
+        lock_cm = profile_lock(profile_path)
+        lock_cm.__enter__()
+        self._profile_lock_cm = lock_cm
+        try:
+            context = await self._launch_context(profile, profile_path, headless)
+        except Exception:
+            self._release_profile_lock()
+            raise
+        browser = context.browser
+        if browser is None:
+            try:
+                await context.close()
+            except Exception:
+                pass
+            self._release_profile_lock()
+            raise RuntimeError("CloakBrowser persistent context has no browser")
+        self._context = context
+        self._browser = browser
+        self._profile_id = profile_id
+        self._profile_path = str(profile_path)
+        self._owned = True
+        self._attached_cdp = ""
+        self._playwright = None
+
+    async def _launch_context(self, profile: Any, profile_path: Any, headless: bool | None) -> Any:
+        try:
+            from cloakbrowser import launch_persistent_context_async  # type: ignore[import-untyped]
+        except ImportError as error:
+            raise RuntimeError("cloakbrowser is not installed") from error
+        return await launch_persistent_context_async(
+            str(profile_path),
+            headless=profile.headless if headless is None else headless,
+        )
+
+    def _release_profile_lock(self) -> None:
+        if self._profile_lock_cm is None:
+            return
+        try:
+            self._profile_lock_cm.__exit__(None, None, None)
+        except Exception:
+            pass
+        self._profile_lock_cm = None
 
     async def _open_urls_unlocked(self, urls: list[str]) -> list[str]:
         assert self._context is not None
@@ -202,33 +244,6 @@ class ReverseSession:
             await self._ensure_page_domains(self._pages[self._selected_page_idx])
         return opened
 
-    async def connect_holder(self, profile_id: str, open_result: dict[str, Any]) -> dict[str, Any]:
-        """Connect after the independent daemon has started or reused a holder."""
-        async with self._lock:
-            if self.active:
-                if self._profile_id != profile_id or self._attached_cdp:
-                    raise RuntimeError(
-                        f"reverse session already attached to profile={self._profile_id}; detach before switching"
-                    )
-                await self._refresh_pages()
-            else:
-                holder = debug_session.load_session()
-                if holder is None or holder.profile_id != profile_id:
-                    raise RuntimeError("holder did not publish a verified session")
-                await self._connect_holder_unlocked(holder)
-            return {
-                "ok": True,
-                "action": "open",
-                "reused": bool(open_result.get("reused", False)),
-                "mode": "attached-holder",
-                "profile_id": profile_id,
-                "profile_path": self._profile_path,
-                "opened": open_result.get("opened", []),
-                "pages": self._page_summaries(),
-                "control": "python-cloakbrowser-holder",
-            }
-
-
     async def new_tab(self, url: str) -> dict[str, Any]:
         if not url.startswith("https://"):
             raise ValueError(f"only https URLs are allowed: {_safe_url(url)}")
@@ -241,7 +256,7 @@ class ReverseSession:
         await self._ensure_page_domains(self._pages[self._selected_page_idx])
         return {
             "ok": True,
-            "mode": "attached-holder" if not self._attached_cdp else "attached-cdp",
+            "mode": "owned" if self._owned and not self._attached_cdp else ("attached-cdp" if self._attached_cdp else None),
             "url": _safe_url(page.url),
             "page_idx": self._selected_page_idx,
             "pages": self._page_summaries(),
@@ -251,7 +266,7 @@ class ReverseSession:
         await self.ensure_ready()
         return {
             "ok": True,
-            "mode": "attached-holder" if not self._attached_cdp else "attached-cdp",
+            "mode": "owned" if self._owned and not self._attached_cdp else ("attached-cdp" if self._attached_cdp else None),
             "pages": self._page_summaries(),
             "selected_page_idx": self._selected_page_idx,
         }
@@ -259,47 +274,30 @@ class ReverseSession:
     async def ensure_attached(self, cdp_http: str | None = None) -> dict[str, Any]:
         """Optional/legacy: attach to an external CDP endpoint."""
         async with self._lock:
-            if self.active and not self._attached_cdp and not (cdp_http or "").strip():
+            if self.active and self._owned and not (cdp_http or "").strip():
                 await self._refresh_pages()
                 return {
                     "ok": True,
                     "action": "attach",
-                    "mode": "attached-holder",
+                    "mode": "owned",
                     "reused": True,
                     "profile_id": self._profile_id,
                     "pages": self._page_summaries(),
                 }
-            if not (cdp_http or "").strip():
-                holder = debug_session.load_session()
-                if holder is None:
-                    raise RuntimeError("No browser holder. Call cloak_debug_open first.")
-                if self.active:
-                    await self._detach_unlocked()
-                await self._connect_holder_unlocked(holder)
-                return {
-                    "ok": True,
-                    "action": "attach",
-                    "mode": "attached-holder",
-                    "reused": False,
-                    "pages": self._page_summaries(),
-                }
             endpoint = (cdp_http or "").strip()
             if not endpoint:
-                raise RuntimeError(
-                    "No browser session. Prefer cloak_debug_open (independent holder). "
-                    "CDP attach is only a fallback."
-                )
+                raise RuntimeError("No browser session. Call cloak_debug_open first. CDP attach is only a fallback.")
             if self.active and self._attached_cdp == endpoint:
                 await self._refresh_pages()
-                return {"ok": True, "action": "attach", "cdp_http": endpoint, "mode": "attached", "reused": True}
+                return {"ok": True, "action": "attach", "cdp_http": endpoint, "mode": "attached-cdp", "reused": True}
             if self.active:
-                await self._detach_unlocked()
+                await self._close_owned_unlocked()
             await self._attach_unlocked(endpoint)
             return {
                 "ok": True,
                 "action": "attach",
                 "cdp_http": endpoint,
-                "mode": "attached",
+                "mode": "attached-cdp",
                 "reused": False,
                 "pages": self._page_summaries(),
             }
@@ -312,79 +310,110 @@ class ReverseSession:
         if not self._browser.contexts:
             raise RuntimeError(f"CDP endpoint has no browser contexts: {endpoint}")
         self._context = self._browser.contexts[0]
-        self._holder_instance_id = None
         self._profile_id = None
         self._profile_path = None
+        self._owned = False
         self._attached_cdp = endpoint
         await self._refresh_pages()
         if self._pages:
             await self._ensure_page_domains(self._pages[self._selected_page_idx])
 
-    async def _connect_holder_unlocked(self, holder: debug_session.DebugSession) -> None:
-        from playwright.async_api import async_playwright
-
-        self._playwright = await async_playwright().start()
-        try:
-            self._browser = await self._playwright.chromium.connect(holder.endpoint)
-            if not self._browser.contexts:
-                raise RuntimeError("holder has no browser contexts")
-            self._context = self._browser.contexts[0]
-            self._profile_id = holder.profile_id
-            self._profile_path = holder.profile_path
-            self._holder_instance_id = holder.instance_id
-            self._attached_cdp = ""
-            await self._refresh_pages()
-            if self._pages:
-                await self._ensure_page_domains(self._pages[self._selected_page_idx])
-        except Exception:
-            await self._playwright.stop()
-            self._playwright = None
-            self._browser = None
-            self._context = None
-            raise
-
     async def detach(self) -> dict[str, Any]:
         async with self._lock:
-            await self._detach_unlocked()
-            return {"ok": True, "action": "detach", "closed_owned_browser": False}
-
-    async def close_session(self, profile_id: str) -> dict[str, Any]:
-        """Explicitly close the independent holder after detaching this client."""
-        async with self._lock:
-            instance_id = self._holder_instance_id
-            if self._profile_id is not None and self._profile_id != profile_id:
-                raise RuntimeError("refusing to close a different profile holder")
-            if instance_id is None:
-                holder = debug_session.load_session()
-                if holder is None or holder.profile_id != profile_id:
-                    raise RuntimeError("no verified holder for the requested profile")
-                instance_id = holder.instance_id
-            result = await asyncio.to_thread(debug_session.close_session, profile_id, instance_id)
-            await self._detach_unlocked()
-            self._holder_instance_id = None
+            result = await self._close_owned_unlocked()
+            result["action"] = "detach"
             return result
 
-    async def _detach_unlocked(self) -> None:
+    async def close_session(self, profile_id: str) -> dict[str, Any]:
+        async with self._lock:
+            if self._profile_id is not None and self._profile_id != profile_id:
+                raise RuntimeError("refusing to close a different profile")
+            return await self._close_owned_unlocked()
+
+    async def close_owned(self) -> dict[str, Any]:
+        async with self._lock:
+            return await self._close_owned_unlocked()
+
+    async def profile_operation(self, profile_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        async with self._lock:
+            if not self.active or not self._owned or self._profile_id != profile_id:
+                return None
+            from cloak_browser_auth.cloak_profiles import CloakProfileManager
+            from cloak_browser_auth.config import Registry
+            from cloak_browser_auth.models import AuthBundle
+
+            op = str(payload.get("op") or "")
+            site_id = str(payload.get("site_id") or "")
+            registry = Registry.load()
+            site, _profile = registry.target(site_id, profile_id)
+            manager = CloakProfileManager(registry)
+            assert self._context is not None
+            if op == "auth_import":
+                bundle = AuthBundle.model_validate(payload.get("bundle"))
+                mode = str(payload.get("mode") or "merge")
+                verified = await manager.import_auth_in_context(self._context, site, bundle, mode)
+                return {
+                    "ok": True,
+                    "site_id": site.id,
+                    "target_profile": profile_id,
+                    "cookies_imported": len(bundle.cookies),
+                    "origins_imported": len(bundle.origins),
+                    "verified": verified,
+                }
+            if op == "auth_verify":
+                verified = await manager._verify_in_context(self._context, site)
+                return {"ok": True, "verified": verified}
+            if op == "auth_clear":
+                cookies_cleared = await manager.clear_in_context(self._context, site)
+                return {
+                    "ok": True,
+                    "site_id": site.id,
+                    "target_profile": profile_id,
+                    "cookies_cleared": cookies_cleared,
+                    "origins_cleared": len(site.origins),
+                }
+            raise ValueError(f"unknown op: {op}")
+
+    async def _close_owned_unlocked(self) -> dict[str, Any]:
+        profile_id = self._profile_id
+        owned = self._owned
+        context = self._context
         for cdp in list(self._cdp_by_page.values()):
             try:
                 await cdp.detach()
             except Exception:
                 pass
         self._cdp_by_page.clear()
-        self._pages = []
-        self._browser = None
-        self._context = None
-        self._profile_id = None
-        self._profile_path = None
+        if owned and context is not None:
+            try:
+                await context.close()
+            except Exception:
+                pass
         if self._playwright is not None:
             try:
                 await self._playwright.stop()
             except Exception:
                 pass
+        self._release_profile_lock()
+        self._pages = []
+        self._browser = None
+        self._context = None
+        self._profile_id = None
+        self._profile_path = None
         self._playwright = None
+        self._owned = False
         self._attached_cdp = ""
         self._domains_enabled.clear()
         self._paused = None
+        return {
+            "ok": True,
+            "action": "close",
+            "closed_profile": profile_id,
+            "closed_owned_browser": owned,
+        }
+
+    async def _detach_unlocked(self) -> None:
+        await self._close_owned_unlocked()
 
     async def _refresh_pages(self) -> None:
         assert self._context is not None

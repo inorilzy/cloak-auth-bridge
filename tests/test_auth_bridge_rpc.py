@@ -85,37 +85,6 @@ async def test_client_rejects_daemon_when_shared_token_does_not_match() -> None:
             await client.list_sites()
 
 
-@pytest.mark.asyncio
-async def test_mcp_requests_holder_launch_from_independent_daemon(monkeypatch) -> None:
-    token = "0123456789abcdef"
-    service = FakeAuthService()
-    launched: list[tuple[str, list[str]]] = []
-
-    def fake_open(profile_id: str, urls: list[str]) -> dict[str, Any]:
-        launched.append((profile_id, urls))
-        return {"ok": True, "action": "open", "reused": False}
-
-    monkeypatch.setattr("cloak_browser_auth.debug_session.open_session", fake_open)
-    server = ExtensionWebSocketServer(
-        ExtensionBridge(),
-        service=service,
-        client_token=token,
-        port=0,
-    )
-
-    async with server.serve() as running_server:
-        port = running_server.sockets[0].getsockname()[1]
-        client = AuthBridgeClient(f"ws://127.0.0.1:{port}/auth", token)
-
-        assert await client.ensure_holder("shared-main", ["https://www.bilibili.com/"]) == {
-            "ok": True,
-            "action": "open",
-            "reused": False,
-        }
-
-    assert launched == [("shared-main", ["https://www.bilibili.com/"])]
-
-
 def test_mcp_builds_client_while_serve_builds_websocket_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLOAK_BROWSER_AUTH_CLIENT_TOKEN", "local-client-token")
 
@@ -152,7 +121,7 @@ async def test_mcp_embeds_auth_bridge_when_port_is_free(monkeypatch: pytest.Monk
             return FakeServe()
 
     monkeypatch.setattr(main, "auth_bridge_listening", lambda port=17321, host="127.0.0.1": listening["up"])
-    monkeypatch.setattr(main, "build_runtime", lambda: (FakeServer(), object()))
+    monkeypatch.setattr(main, "build_runtime", lambda session=None: (FakeServer(), object()))
 
     async with main.maybe_embed_auth_bridge() as embedded:
         assert embedded is True
@@ -197,7 +166,7 @@ async def test_mcp_attaches_if_embed_loses_the_port_race(monkeypatch: pytest.Mon
             return FakeServe()
 
     monkeypatch.setattr(main, "auth_bridge_listening", lambda port=17321, host="127.0.0.1": listening["up"])
-    monkeypatch.setattr(main, "build_runtime", lambda: (FakeServer(), object()))
+    monkeypatch.setattr(main, "build_runtime", lambda session=None: (FakeServer(), object()))
 
     async with main.maybe_embed_auth_bridge() as embedded:
         assert embedded is False

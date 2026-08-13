@@ -4,7 +4,7 @@
 
 日常只装 MCP。IDE 启动时若 `127.0.0.1:17321` 空闲，MCP 自己带上扩展认证桥；已被占用则复用已有实例。
 
-Cloak 窗口仍由独立 Holder 进程持有，所以关掉 IDE / 重载 MCP 不会关浏览器。只有 `cloak_debug_close(profile_id=..., confirm=true)` 或手动关窗才会结束 Holder。
+Cloak 窗口活在这个 MCP 进程里：关掉 IDE / 重载 MCP，窗口一起关。
 
 `serve` 是可选项：只在希望 IDE 关掉后扩展仍保持连接时才单独常驻。
 
@@ -91,7 +91,7 @@ cd cloak-browser-auth
 
 - 扩展连 `ws://127.0.0.1:17321`（由这个 MCP 或已有实例提供）
 - Agent 可直接调下方工具
-- 重载 MCP 不会关闭已打开的 Cloak 窗口
+- 重载 MCP 会关闭 Cloak 窗口
 - `:17321` 只允许一个认证桥；后启动的 MCP 自动复用
 
 可选：希望 IDE 全关后扩展仍在线，再单独跑 `serve`。
@@ -113,10 +113,9 @@ cd cloak-browser-auth
 IDE 启动 cloak-browser-auth MCP（空闲则自带 :17321）
   -> Chrome 扩展连 ws://127.0.0.1:17321
   -> auth_sync_to_cloak
-  -> cloak_debug_open（拉起独立 Cloak Holder）
+  -> cloak_debug_open（本进程打开 Cloak）
   -> 调试：navigate_page / list_network_requests / ...
-  -> MCP 可退出；浏览器继续保留
-  -> 仅在确实结束时 cloak_debug_close(profile_id, confirm=true)
+  -> MCP 退出，窗口一起关
 ```
 
 ## MCP 工具
@@ -130,7 +129,7 @@ IDE 启动 cloak-browser-auth MCP（空闲则自带 :17321）
 
 ### Cloak 会话
 
-- `cloak_debug_open` — 启动或复用独立的 headed Cloak Holder（默认 `shared-main`）
+- `cloak_debug_open` — 在本 MCP 进程启动或复用 headed CloakBrowser（默认 `shared-main`）
 - `cloak_debug_tab` / `cloak_debug_list` / `cloak_debug_status` / `cloak_debug_close(profile_id, confirm=true)`
 
 ### 内置逆向工具（Python 重写 js-reverse 工具面）
@@ -160,7 +159,7 @@ IDE 启动 cloak-browser-auth MCP（空闲则自带 :17321）
 
 - `list_console_messages` / `evaluate_script` / `clear_site_data`
 
-这些工具通过 Holder 控制 `cloak_debug_open` 启动的同一 Cloak 会话；MCP 只是客户端，其退出不会结束浏览器。
+这些工具操作 `cloak_debug_open` 在本进程打开的同一 Cloak 窗口。MCP 退出时窗口一起关。
 
 统一工作流：
 
@@ -184,7 +183,7 @@ cloak_debug_close(profile, confirm=true)
 }
 ```
 
-打开 Cloak 供 js-reverse 挂接：
+打开 Cloak：
 
 ```json
 {"name": "cloak_debug_open", "arguments": {"profile_id": "shared-main", "url": ["https://www.xiaohongshu.com"]}}
@@ -216,28 +215,15 @@ profiles.json
 Chrome 扩展
     │ WebSocket 127.0.0.1:17321
     ▼
-MCP stdio（:17321 空闲则嵌入认证桥，否则复用）
-    ├─ /auth holder_open ── spawn ── Cloak Holder  ← 唯一浏览器 owner
-    │                                  └─ cloakbrowser → profiles/
-    └─ Playwright connect ───────────────────────────┘
+MCP stdio
+    ├─ 认证桥（:17321 空闲则嵌入，否则复用）
+    └─ cloak_debug_open → 本进程 launch CloakBrowser → profiles/
 
-可选：单独 `serve` 常驻同一端口，给无 IDE 场景用
+可选：单独 serve 常驻同一端口，给无 IDE 场景用（不管浏览器）
 ```
 
-关掉 MCP 不会关 Holder。关浏览器必须 `cloak_debug_close(profile_id=..., confirm=true)` 或手动关窗。
+关掉 MCP 会关 Cloak 窗口。也可以 `cloak_debug_close(profile_id=..., confirm=true)` 或手动关窗。
 
-## 调试 CLI（可选）
-
-与 MCP 调试工具等价，便于终端手调：
-
-```powershell
-.\.venv\Scripts\python.exe -m cloak_browser_auth debug-open --profile shared-main --url https://www.youtube.com
-.\.venv\Scripts\python.exe -m cloak_browser_auth debug-tab https://x.com/home
-.\.venv\Scripts\python.exe -m cloak_browser_auth debug-list
-.\.venv\Scripts\python.exe -m cloak_browser_auth debug-close
-```
-
-默认 Holder 控制端口：`127.0.0.1:19333`；状态文件：`.auth/debug-session.json`。该端口不是公开 CDP 端点。
 
 ## 安装 Chrome 扩展
 

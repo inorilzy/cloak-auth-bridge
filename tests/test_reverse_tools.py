@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from cloak_browser_auth import mcp_server
-from cloak_browser_auth.debug_session import DebugSession
 from cloak_browser_auth.reverse_session import ReverseSession, _safe_url
 
 REQUIRED_REVERSE_TOOLS = {
@@ -45,7 +44,6 @@ def test_mcp_source_registers_js_reverse_equivalent_tools() -> None:
     source = Path(mcp_server.__file__).read_text(encoding="utf-8")
     for name in REQUIRED_REVERSE_TOOLS:
         assert f'"{name}"' in source
-    assert ReverseSession is not None
     status = ReverseSession().status()
     assert status["ok"] is True and status["active"] is False
 
@@ -65,10 +63,28 @@ def test_status_reports_mode_field() -> None:
     assert "profile_id" in status
 
 
+class FakePage:
+    def __init__(self, url: str = "about:blank") -> None:
+        self.url = url
+
+    async def goto(self, url: str, wait_until: str = "domcontentloaded") -> None:
+        del wait_until
+        self.url = url
+
+    async def title(self) -> str:
+        return ""
+
+
 class FakeContext:
     def __init__(self) -> None:
-        self.pages: list[object] = []
+        self.pages: list[FakePage] = []
         self.closed = False
+        self.browser = FakeBrowser()
+
+    async def new_page(self) -> FakePage:
+        page = FakePage()
+        self.pages.append(page)
+        return page
 
     async def close(self) -> None:
         self.closed = True
@@ -91,82 +107,90 @@ class FakeBrowser:
 
 
 @pytest.mark.asyncio
-async def test_detach_disconnects_client_without_closing_holder_context() -> None:
+async def test_detach_closes_owned_browser() -> None:
     session = ReverseSession()
     context = FakeContext()
-    playwright = FakePlaywright()
-    session._browser = object()
+    session._browser = context.browser
     session._context = context
-    session._playwright = playwright
+    session._owned = True
+    session._profile_id = "shared-main"
 
     result = await session.detach()
 
-    assert result == {"ok": True, "action": "detach", "closed_owned_browser": False}
-    assert context.closed is False
-    assert playwright.stopped is True
+    assert result["closed_owned_browser"] is True
+    assert context.closed is True
+    assert session.active is False
 
 
-def test_disconnected_holder_client_is_not_active() -> None:
+def test_disconnected_owned_browser_is_not_active() -> None:
     session = ReverseSession()
     session._browser = FakeBrowser(connected=False)
     session._context = FakeContext()
+    session._owned = True
 
     assert session.active is False
 
 
 @pytest.mark.asyncio
-async def test_open_profile_connects_existing_holder_without_spawning(monkeypatch) -> None:
-    holder = DebugSession(
-        profile_id="shared-main",
-        profile_path="profile",
-        port=19333,
-        pid=123,
-        control_http="http://127.0.0.1:19333",
-        started_at="2026-08-12T00:00:00+00:00",
-        instance_id="test",
-        endpoint="pipe://holder",
-    )
-    spawned: list[object] = []
-    monkeypatch.setattr(
-        "cloak_browser_auth.reverse_session.debug_session.open_session",
-        lambda *_args, **_kwargs: spawned.append("spawned") or {},
-    )
-    monkeypatch.setattr("cloak_browser_auth.reverse_session.debug_session.load_session", lambda: holder)
+async def test_open_profile_launches_owned_context(monkeypatch: pytest.MonkeyPatch) -> None:
     session = ReverseSession()
+    context = FakeContext()
+    launched: list[str] = []
 
-    async def fake_connect(value: DebugSession) -> None:
-        assert value is holder
-        session._browser = object()
-        session._context = FakeContext()
-        session._profile_id = value.profile_id
-        session._profile_path = value.profile_path
+    async def fake_launch(profile_id: str, headless: bool | None) -> None:
+        del headless
+        launched.append(profile_id)
+        session._context = context
+        session._browser = context.browser
+        session._profile_id = profile_id
+        session._profile_path = "profiles/shared-main"
+        session._owned = True
 
-    monkeypatch.setattr(session, "_connect_holder_unlocked", fake_connect)
+    async def fake_domains(page: object) -> None:
+        del page
 
-    result = await session.open_profile("shared-main")
+    monkeypatch.setattr(session, "_launch_owned_unlocked", fake_launch)
+    monkeypatch.setattr(session, "_ensure_page_domains", fake_domains)
 
-    assert spawned == []
-    assert result["mode"] == "attached-holder"
+    result = await session.open_profile("shared-main", ["https://www.bilibili.com/"])
+
+    assert launched == ["shared-main"]
+    assert result["mode"] == "owned"
+    assert result["reused"] is False
+    assert result["opened"] == ["https://www.bilibili.com/"]
     assert result["profile_id"] == "shared-main"
-    assert result["opened"] == []
 
 
 @pytest.mark.asyncio
-async def test_open_profile_does_not_spawn_when_no_holder(monkeypatch) -> None:
-    spawned: list[object] = []
-    monkeypatch.setattr(
-        "cloak_browser_auth.reverse_session.debug_session.open_session",
-        lambda *_args, **_kwargs: spawned.append("spawned") or {},
-    )
-    monkeypatch.setattr("cloak_browser_auth.reverse_session.debug_session.load_session", lambda: None)
+async def test_open_profile_reuses_owned_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = ReverseSession()
+    context = FakeContext()
+    session._context = context
+    session._browser = context.browser
+    session._profile_id = "shared-main"
+    session._profile_path = "profiles/shared-main"
+    session._owned = True
+    launched: list[str] = []
 
-    with pytest.raises(RuntimeError, match="cloak_debug_open"):
-        await ReverseSession().open_profile("shared-main")
-    assert spawned == []
+    async def fake_launch(profile_id: str, headless: bool | None) -> None:
+        del headless
+        launched.append(profile_id)
+
+    async def fake_domains(page: object) -> None:
+        del page
+
+    monkeypatch.setattr(session, "_launch_owned_unlocked", fake_launch)
+    monkeypatch.setattr(session, "_ensure_page_domains", fake_domains)
+
+    result = await session.open_profile("shared-main", ["https://x.com/home"])
+
+    assert launched == []
+    assert result["reused"] is True
+    assert result["opened"] == ["https://x.com/home"]
 
 
 @pytest.mark.asyncio
-async def test_debug_tab_uses_reverse_session_not_holder_http() -> None:
+async def test_debug_tab_uses_reverse_session() -> None:
     session = ReverseSession()
     calls: list[str] = []
 
@@ -188,15 +212,28 @@ async def test_debug_tab_uses_reverse_session_not_holder_http() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_uses_the_instance_connected_by_this_client(monkeypatch) -> None:
+async def test_close_owned_browser_for_matching_profile() -> None:
     session = ReverseSession()
+    context = FakeContext()
+    session._browser = context.browser
+    session._context = context
+    session._owned = True
     session._profile_id = "shared-main"
-    session._holder_instance_id = "connected-instance"
-    calls: list[tuple[str, str | None]] = []
-    monkeypatch.setattr(
-        "cloak_browser_auth.reverse_session.debug_session.close_session",
-        lambda profile_id, instance_id: calls.append((profile_id, instance_id)) or {"ok": True},
-    )
 
-    assert await session.close_session("shared-main") == {"ok": True}
-    assert calls == [("shared-main", "connected-instance")]
+    result = await session.close_session("shared-main")
+
+    assert result["closed_owned_browser"] is True
+    assert result["closed_profile"] == "shared-main"
+    assert context.closed is True
+
+
+@pytest.mark.asyncio
+async def test_close_refuses_a_different_profile() -> None:
+    session = ReverseSession()
+    session._owned = True
+    session._profile_id = "shared-main"
+    session._context = FakeContext()
+    session._browser = FakeBrowser()
+
+    with pytest.raises(RuntimeError, match="different profile"):
+        await session.close_session("bilibili-main")

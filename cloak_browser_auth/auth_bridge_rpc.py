@@ -36,8 +36,6 @@ class AuthBridgeClient:
             confirm=confirm,
         )
 
-    async def ensure_holder(self, profile_id: str, urls: list[str]) -> dict[str, Any]:
-        return await self._call("holder_open", profile_id=profile_id, urls=urls)
 
     async def _call(self, operation: str, **arguments: Any) -> dict[str, Any]:
         try:

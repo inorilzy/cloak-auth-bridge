@@ -79,25 +79,12 @@ class ExtensionWebSocketServer:
                     arguments["target_profile"],
                     arguments["confirm"],
                 )
-            elif operation == "holder_open":
-                from cloak_browser_auth.debug_session import open_session
-
-                result = await asyncio.to_thread(
-                    open_session,
-                    arguments["profile_id"],
-                    arguments.get("urls", []),
-                )
             else:
                 raise ValueError("unknown auth operation")
             response = {"ok": True, "result": result}
         except (KeyError, TypeError, ValueError, RuntimeError) as error:
-            if operation == "holder_open":
-                message = str(error)
-                LOGGER.warning("Holder open failed: error_type=%s reason=%s", type(error).__name__, message)
-                response = {"ok": False, "error": message}
-            else:
-                LOGGER.warning("Auth Bridge request failed: error_type=%s", type(error).__name__)
-                response = {"ok": False, "error": "Auth Bridge operation failed; inspect daemon diagnostics"}
+            LOGGER.warning("Auth Bridge request failed: error_type=%s", type(error).__name__)
+            response = {"ok": False, "error": "Auth Bridge operation failed; inspect daemon diagnostics"}
         await connection.send(json.dumps(response, ensure_ascii=False))
 
     def serve(self) -> Any:

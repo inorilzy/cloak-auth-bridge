@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -9,7 +8,7 @@ from mcp import types
 from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
-from cloak_browser_auth import __version__, debug_session
+from cloak_browser_auth import __version__
 from cloak_browser_auth.auth_bridge_rpc import AuthBridgeClient
 from cloak_browser_auth.reverse_session import ReverseSession
 
@@ -81,7 +80,7 @@ def build_server(service: AuthBridgeClient, session: ReverseSession | None = Non
             # ---- cloak session lifecycle ----
             _tool(
                 "cloak_debug_open",
-                "Start or reuse one headed CloakBrowser holder. MCP clients may disconnect without closing its pages.",
+                "Start or reuse one headed CloakBrowser in this MCP process. Closing MCP closes the window.",
                 {
                     "type": "object",
                     "properties": {
@@ -450,19 +449,13 @@ async def _dispatch(
     # cloak lifecycle
     if name == "cloak_debug_open":
         profile_id = args.get("profile_id", "shared-main")
-        result = await service.ensure_holder(profile_id, args.get("url") or [])
-        return await session.connect_holder(profile_id, result)
+        return await session.open_profile(profile_id, args.get("url") or [])
     if name == "cloak_debug_tab":
         return await session.new_tab(args["url"])
     if name == "cloak_debug_list":
         return await session.list_pages()
     if name == "cloak_debug_status":
-        status = session.status()
-        try:
-            status["holder"] = await asyncio.to_thread(debug_session.status)
-        except Exception:
-            status["holder"] = None
-        return status
+        return session.status()
     if name == "cloak_debug_close":
         if args.get("confirm") is not True:
             raise ValueError("cloak_debug_close requires confirm=true")

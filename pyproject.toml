@@ -63,4 +63,3 @@ target-version = "py312"
 # CDP attach paths intentionally swallow non-fatal protocol errors.
 "cloak_browser_auth/reverse_session.py" = ["S110", "S112", "BLE001"]
 "cloak_browser_auth/mcp_server.py" = ["S110", "BLE001"]
-"cloak_browser_auth/debug_session.py" = ["S110", "BLE001"]
